@@ -1,0 +1,19 @@
+[gemini]
+llm_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+embed_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent"
+api_key = "YOUR_API_KEY"
+model = "gemini-2.5-flash"
+
+[gemini.reasoning]
+planner = "high"
+executor = "low"
+supervisor = "low"
+
+[agent]
+provider = "gemini"
+soul_file = "defaults/SOUL.md"
+skills_dir = "skills"
+max_turns = 50
+memory_db = "db/memory.db"
+session_path = "db/session.db"
+max_session_chars = 200000
