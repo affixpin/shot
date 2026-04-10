@@ -1,81 +1,79 @@
-use shotclaw::{CompletedStep, Config};
+use clap::{Parser, Subcommand};
+use std::io::{self, IsTerminal, Read};
+
+#[derive(Parser)]
+#[command(name = "shot", about = "Agentic AI assistant")]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+
+    /// Message to process
+    message: Vec<String>,
+
+    /// Verbose output (JSON events to stdout)
+    #[arg(short, long)]
+    verbose: bool,
+
+    /// Pretty output (colored events to stderr)
+    #[arg(short, long)]
+    pretty: bool,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Set up shot with a provider (e.g. shot configure gemini)
+    Configure {
+        /// Provider name
+        provider: String,
+        /// API key
+        #[arg(long)]
+        api_key: String,
+    },
+}
 
 #[tokio::main]
 async fn main() {
-    let args: Vec<String> = std::env::args().collect();
+    let cli = Cli::parse();
 
-    if args.iter().any(|a| a == "--pretty" || a == "-p") {
-        shotclaw::emit::set_pretty(true);
+    if let Some(Command::Configure { provider, api_key }) = cli.command {
+        shotclaw::config::configure(&provider, &api_key);
+        return;
     }
-    // Remove --pretty/-p from args for further parsing
-    let args: Vec<String> = args.into_iter().filter(|a| a != "--pretty" && a != "-p").collect();
 
-    let config = Config::load();
+    if cli.pretty {
+        shotclaw::emit::set_pretty();
+    } else if cli.verbose {
+        shotclaw::emit::set_verbose();
+    }
 
-    match args.get(1).map(|s| s.as_str()) {
-        Some("plan") => {
-            let msg = rest(&args, 2);
-            match shotclaw::plan(&config, &msg, "", vec![], None).await {
-                Ok(_) => {} // plan is already emitted via events
-                Err(e) => { eprintln!("Error: {e}"); std::process::exit(1); }
-            }
+    let arg_msg = cli.message.join(" ");
+
+    let stdin_data = if !io::stdin().is_terminal() {
+        let mut buf = String::new();
+        io::stdin().read_to_string(&mut buf).unwrap_or_default();
+        buf.trim().to_string()
+    } else {
+        String::new()
+    };
+
+    let msg = match (arg_msg.is_empty(), stdin_data.is_empty()) {
+        (false, false) => format!("{arg_msg}\n\n{stdin_data}"),
+        (false, true) => arg_msg,
+        (true, false) => stdin_data,
+        (true, true) => {
+            eprintln!("Error: no message provided");
+            eprintln!("Usage: shot \"message\" or echo \"data\" | shot \"prompt\"");
+            std::process::exit(1);
         }
-        Some("execute") => {
-            let step = rest(&args, 2);
-            match shotclaw::execute_step(&config, &step, &step, &[], None).await {
-                Ok(result) => println!("{result}"),
-                Err(e) => { eprintln!("Error: {e}"); std::process::exit(1); }
-            }
-        }
-        Some("supervise") => {
-            let request = rest(&args, 2);
-            let stdin = std::io::read_to_string(std::io::stdin()).unwrap_or_default();
-            let inputs: Vec<StepInput> = serde_json::from_str(&stdin).unwrap_or_default();
-            let completed: Vec<CompletedStep> = inputs.into_iter()
-                .map(|s| CompletedStep { step: s.step, result: s.result })
-                .collect();
-            match shotclaw::supervise(&config, &request, &completed, None).await {
-                Ok(shotclaw::SupervisorDecision::Done(answer)) => println!("DONE: {answer}"),
-                Ok(shotclaw::SupervisorDecision::NeedsWork(feedback)) => println!("NEEDS WORK: {feedback}"),
-                Err(e) => { eprintln!("Error: {e}"); std::process::exit(1); }
-            }
-        }
-        Some(msg) if !msg.starts_with('-') => {
-            let msg = rest(&args, 1);
-            if let Err(e) = shotclaw::run(&config, &msg).await {
-                shotclaw::emit::emit_system("error", serde_json::json!({"message": e.to_string()}));
-                eprintln!("Error: {e}");
-                std::process::exit(1);
-            }
-        }
-        _ => {
-            // Legacy: shotclaw --message "hello" / shotclaw -m "hello"
-            if let Some(i) = args.iter().position(|a| a == "--message" || a == "-m") {
-                let msg = args.get(i + 1).cloned().unwrap_or_default();
-                if let Err(e) = shotclaw::run(&config, &msg).await {
-                    shotclaw::emit::emit_system("error", serde_json::json!({"message": e.to_string()}));
-                    eprintln!("Error: {e}");
-                    std::process::exit(1);
-                }
-            } else {
-                eprintln!("Usage:");
-                eprintln!("  shotclaw \"message\"              Full plan-execute-replan cycle");
-                eprintln!("  shotclaw plan \"message\"          Run planner only");
-                eprintln!("  shotclaw execute \"step\"          Run executor for one step");
-                eprintln!("  shotclaw replan \"request\" < steps.json");
-                std::process::exit(1);
-            }
+    };
+
+    let config = shotclaw::Config::load();
+
+    match shotclaw::run(&config, &msg).await {
+        Ok(result) => println!("{result}"),
+        Err(e) => {
+            eprintln!("Error: {e}");
+            std::process::exit(1);
         }
     }
-}
-
-/// Join all args from `from` onward into a single string.
-fn rest(args: &[String], from: usize) -> String {
-    args[from..].join(" ")
-}
-
-#[derive(serde::Deserialize, Default)]
-struct StepInput {
-    step: String,
-    result: String,
 }

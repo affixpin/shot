@@ -1,4 +1,3 @@
-use crate::emit;
 use rusqlite::{ffi::sqlite3_auto_extension, Connection};
 use serde::Deserialize;
 use sqlite_vec::sqlite3_vec_init;
@@ -7,15 +6,6 @@ use zerocopy::IntoBytes;
 
 const EMBED_DIM: usize = 3072; // gemini-embedding-001 output size
 
-const CONSOLIDATION_PROMPT: &str = r#"Extract facts worth remembering from this conversation exchange.
-Return a JSON array of objects with "key" and "content" fields.
-- "key": short snake_case identifier (e.g. "user_lang", "project_name")
-- "content": the fact to remember
-
-Only extract durable facts, preferences, or decisions — not transient details.
-Return [] if nothing is worth remembering.
-Example: [{"key": "preferred_style", "content": "User prefers minimalist design"}]
-Return ONLY the JSON array, no markdown, no explanation."#;
 
 pub struct Memory {
     db: Mutex<Connection>,
@@ -68,6 +58,9 @@ fn init_db(db: &Connection) -> Result<(), Box<dyn std::error::Error>> {
 
 impl Memory {
     pub fn open(db_path: &str, embed_api_key: &str, embed_url: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        if let Some(parent) = std::path::Path::new(db_path).parent() {
+            std::fs::create_dir_all(parent)?;
+        }
         init_vec_extension();
         let db = Connection::open(db_path)?;
         init_db(&db)?;
@@ -137,59 +130,6 @@ impl Memory {
         .filter(|e| e.score > 0.3)
         .collect();
         Ok(entries)
-    }
-
-    pub fn forget(&self, key: &str) -> Result<bool, Box<dyn std::error::Error>> {
-        let db = self.db.lock().unwrap();
-        let d1 = db.execute("DELETE FROM memories WHERE key = ?1", [key])?;
-        let _ = db.execute("DELETE FROM memories_vec WHERE key = ?1", [key]);
-        Ok(d1 > 0)
-    }
-
-    /// Extract and store durable facts from a conversation exchange.
-    pub async fn consolidate(&self, api_base: &str, api_key: &str, user_msg: &str) {
-        let client = reqwest::Client::new();
-        let resp = client
-            .post(format!("{api_base}/chat/completions"))
-            .header("Authorization", format!("Bearer {api_key}"))
-            .json(&serde_json::json!({
-                "model": "gemini-2.5-flash-lite",
-                "temperature": 0.1,
-                "messages": [
-                    {"role": "system", "content": CONSOLIDATION_PROMPT},
-                    {"role": "user", "content": user_msg}
-                ]
-            }))
-            .send().await;
-
-        let Ok(resp) = resp else { return };
-        if !resp.status().is_success() { return; }
-
-        #[derive(Deserialize)]
-        struct Resp { choices: Vec<Choice> }
-        #[derive(Deserialize)]
-        struct Choice { message: Msg }
-        #[derive(Deserialize)]
-        struct Msg { content: Option<String> }
-
-        let Ok(chat) = resp.json::<Resp>().await else { return };
-        let text = chat.choices.into_iter().next()
-            .and_then(|c| c.message.content)
-            .unwrap_or_default();
-
-        let clean = text.trim()
-            .trim_start_matches("```json").trim_start_matches("```")
-            .trim_end_matches("```").trim();
-        if let Ok(facts) = serde_json::from_str::<Vec<serde_json::Value>>(clean) {
-            for fact in facts {
-                let key = fact["key"].as_str().unwrap_or("");
-                let content = fact["content"].as_str().unwrap_or("");
-                if !key.is_empty() && !content.is_empty() {
-                    let _ = self.store(key, content).await;
-                    emit::emit_system("memory", serde_json::json!({"key": key, "action": "stored"}));
-                }
-            }
-        }
     }
 
     pub async fn context_for(&self, user_msg: &str) -> String {

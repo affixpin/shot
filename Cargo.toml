@@ -14,12 +14,17 @@ toml = "0.8"
 ignore = "0.4"
 grep = "0.4"
 regex = "1"
+clap = { version = "4", features = ["derive"] }
 rusqlite = { version = "0.37", features = ["bundled"] }
 sqlite-vec = "0.1"
 zerocopy = "0.8"
 
 [dev-dependencies]
 axum = "0.8"
+
+[[bin]]
+name = "shot"
+path = "src/main.rs"
 
 [profile.release]
 opt-level = "s"

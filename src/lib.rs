@@ -1,12 +1,11 @@
 mod agent;
 pub mod config;
-
 pub mod emit;
-pub mod memory;
-pub mod prompts;
-pub mod react;
-pub mod session;
-pub mod tools;
-pub use agent::{CompletedStep, run, plan, execute_step, supervise};
-pub use tools::SupervisorDecision;
+mod memory;
+mod react;
+mod roles;
+mod session;
+mod tools;
+
+pub use agent::run;
 pub use config::Config;

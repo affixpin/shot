@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use tokio_stream::StreamExt;
 
 // ── Tool definition types ───────────────────────────────────────────────
 
@@ -146,8 +147,6 @@ async fn read_stream(
     resp: reqwest::Response,
     handler: &impl ReactHandler,
 ) -> Result<StreamResult, Box<dyn std::error::Error>> {
-    use tokio_stream::StreamExt;
-
     let mut content = String::new();
     let mut tc_ids: Vec<String> = vec![];
     let mut tc_names: Vec<String> = vec![];
@@ -241,13 +240,11 @@ pub struct ReactConfig {
     pub api_key: String,
     pub model: String,
     pub max_turns: usize,
-    pub actor: &'static str,
     pub reasoning_effort: String,
 }
 
 pub struct ReactResult {
     pub response: String,
-    pub messages: Vec<Message>,
 }
 
 pub async fn run(
@@ -311,7 +308,6 @@ pub async fn run(
 
             return Ok(ReactResult {
                 response: result.content,
-                messages,
             });
         }
 
@@ -331,7 +327,6 @@ pub async fn run(
         if tools.should_stop() {
             return Ok(ReactResult {
                 response: result.content,
-                messages,
             });
         }
     }

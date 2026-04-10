@@ -9,6 +9,9 @@ pub struct Session {
 
 impl Session {
     pub fn open(db_path: &str, max_chars: usize) -> Result<Self, Box<dyn std::error::Error>> {
+        if let Some(parent) = std::path::Path::new(db_path).parent() {
+            std::fs::create_dir_all(parent)?;
+        }
         let db = Connection::open(db_path)?;
 
         let has_table: bool = db.query_row(
@@ -89,8 +92,4 @@ impl Session {
         );
     }
 
-    pub fn clear(&self) {
-        let db = self.db.lock().unwrap();
-        let _ = db.execute_batch("DELETE FROM messages");
-    }
 }

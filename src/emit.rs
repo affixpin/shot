@@ -1,11 +1,23 @@
 use std::io::Write;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-static PRETTY: AtomicBool = AtomicBool::new(false);
+const MODE_QUIET: u8 = 0;
+const MODE_VERBOSE: u8 = 1;
+const MODE_PRETTY: u8 = 2;
 
-pub fn set_pretty(enabled: bool) {
-    PRETTY.store(enabled, Ordering::Relaxed);
+static MODE: AtomicU8 = AtomicU8::new(MODE_QUIET);
+
+pub fn set_verbose() {
+    MODE.store(MODE_VERBOSE, Ordering::Relaxed);
+}
+
+pub fn set_pretty() {
+    MODE.store(MODE_PRETTY, Ordering::Relaxed);
+}
+
+fn mode() -> u8 {
+    MODE.load(Ordering::Relaxed)
 }
 
 fn now() -> u64 {
@@ -13,18 +25,21 @@ fn now() -> u64 {
 }
 
 fn emit_raw(event: &serde_json::Value) {
-    if PRETTY.load(Ordering::Relaxed) {
-        pretty_print(event);
-    } else {
-        let mut stdout = std::io::stdout().lock();
-        let _ = serde_json::to_writer(&mut stdout, event);
-        let _ = stdout.write_all(b"\n");
-        let _ = stdout.flush();
+    match mode() {
+        MODE_PRETTY => pretty_print(event),
+        MODE_VERBOSE => {
+            let mut stdout = std::io::stdout().lock();
+            let _ = serde_json::to_writer(&mut stdout, event);
+            let _ = stdout.write_all(b"\n");
+            let _ = stdout.flush();
+        }
+        _ => {}
     }
 }
 
 /// Emit an event with the standard envelope: type, ts, actor, data.
 pub fn emit(typ: &str, actor: &str, data: serde_json::Value) {
+    if mode() == MODE_QUIET { return; }
     emit_raw(&serde_json::json!({
         "type": typ,
         "ts": now(),
@@ -35,6 +50,7 @@ pub fn emit(typ: &str, actor: &str, data: serde_json::Value) {
 
 /// Emit an event without an actor (system-level events).
 pub fn emit_system(typ: &str, data: serde_json::Value) {
+    if mode() == MODE_QUIET { return; }
     emit_raw(&serde_json::json!({
         "type": typ,
         "ts": now(),
@@ -44,7 +60,6 @@ pub fn emit_system(typ: &str, data: serde_json::Value) {
 
 // ── Pretty printer ──────────────────────────────────────────────────────
 
-// ANSI colors
 const RESET: &str = "\x1b[0m";
 const DIM: &str = "\x1b[2m";
 const BOLD: &str = "\x1b[1m";
@@ -193,9 +208,7 @@ fn pretty_print(event: &serde_json::Value) {
                 _ => { let _ = writeln!(out, "{tag} {DIM}supervise: {action}{RESET}"); }
             }
         }
-        "text" => {
-            // Skip in pretty — executor text is streaming noise
-        }
+        "text" => {}
         "done" => {
             let content = data["content"].as_str().unwrap_or("");
             let _ = writeln!(out, "\n{BOLD}━━━ Result ━━━{RESET}");
