@@ -37,23 +37,14 @@ fn emit_raw(event: &serde_json::Value) {
     }
 }
 
-/// Emit an event with the standard envelope: type, ts, actor, data.
-pub fn emit(typ: &str, actor: &str, data: serde_json::Value) {
+/// Emit an event with actor and color.
+pub fn emit(typ: &str, actor: &str, color: &str, data: serde_json::Value) {
     if mode() == MODE_QUIET { return; }
     emit_raw(&serde_json::json!({
         "type": typ,
         "ts": now(),
         "actor": actor,
-        "data": data,
-    }));
-}
-
-/// Emit an event without an actor (system-level events).
-pub fn emit_system(typ: &str, data: serde_json::Value) {
-    if mode() == MODE_QUIET { return; }
-    emit_raw(&serde_json::json!({
-        "type": typ,
-        "ts": now(),
+        "color": color,
         "data": data,
     }));
 }
@@ -71,17 +62,17 @@ const MAGENTA: &str = "\x1b[35m";
 const CYAN: &str = "\x1b[36m";
 const WHITE: &str = "\x1b[37m";
 
-fn actor_color(actor: &str) -> &'static str {
-    match actor {
-        "planner" => CYAN,
-        "executor" => GREEN,
-        "supervisor" => MAGENTA,
+fn resolve_color(name: &str) -> &'static str {
+    match name {
+        "red" => RED,
+        "green" => GREEN,
+        "yellow" => YELLOW,
+        "blue" => BLUE,
+        "magenta" => MAGENTA,
+        "cyan" => CYAN,
+        "white" => WHITE,
         _ => WHITE,
     }
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max { s.to_string() } else { format!("{}…", &s[..max]) }
 }
 
 fn pretty_print(event: &serde_json::Value) {
@@ -89,7 +80,7 @@ fn pretty_print(event: &serde_json::Value) {
     let typ = event["type"].as_str().unwrap_or("?");
     let actor = event["actor"].as_str().unwrap_or("");
     let data = &event["data"];
-    let color = actor_color(actor);
+    let color = resolve_color(event["color"].as_str().unwrap_or("white"));
 
     let tag = if actor.is_empty() {
         format!("{DIM}[system]{RESET}")
@@ -98,21 +89,6 @@ fn pretty_print(event: &serde_json::Value) {
     };
 
     match typ {
-        "phase.start" => {
-            let msg = data["user_message"].as_str().unwrap_or("");
-            let chars = data["system_prompt_chars"].as_u64().unwrap_or(0);
-            let _ = writeln!(out, "\n{tag} {BOLD}▸ started{RESET} {DIM}(prompt: {chars} chars){RESET}");
-            if !msg.is_empty() {
-                let _ = writeln!(out, "  {DIM}{}{RESET}", truncate(msg, 120));
-            }
-        }
-        "phase.end" => {
-            let resp = data["response"].as_str().unwrap_or("");
-            let _ = writeln!(out, "{tag} {DIM}▸ ended{RESET}");
-            if !resp.is_empty() {
-                let _ = writeln!(out, "  {DIM}{}{RESET}", truncate(resp, 120));
-            }
-        }
         "llm.request" => {
             let turn = data["turn"].as_u64().unwrap_or(0);
             let msgs = data["messages"].as_u64().unwrap_or(0);
@@ -125,112 +101,42 @@ fn pretty_print(event: &serde_json::Value) {
             if tc > 0 {
                 let _ = writeln!(out, "{tag} {DIM}→ llm turn={turn} tool_calls={tc}{RESET}");
             } else if !content.is_empty() {
-                let _ = writeln!(out, "{tag} {DIM}→ llm turn={turn}{RESET} {}", truncate(content, 100));
+                let _ = writeln!(out, "{tag} {DIM}→ llm turn={turn}{RESET} {}", content);
             } else {
                 let _ = writeln!(out, "{tag} {DIM}→ llm turn={turn} (empty){RESET}");
             }
         }
         "llm.error" => {
             let err = data["error"].as_str().unwrap_or("?");
-            let _ = writeln!(out, "{tag} {RED}✗ llm error:{RESET} {}", truncate(err, 150));
+            let _ = writeln!(out, "{tag} {RED}✗ llm error:{RESET} {}", err);
         }
         "tool.call" => {
             let name = data["name"].as_str().unwrap_or("?");
             let args = &data["args"];
-            let args_str = match name {
-                "shell" => args["command"].as_str().unwrap_or("").to_string(),
-                "file_read" => args["path"].as_str().unwrap_or("").to_string(),
-                "file_write" => args["path"].as_str().unwrap_or("").to_string(),
-                "list_files" => {
-                    let path = args["path"].as_str().unwrap_or(".");
-                    let ext = args["ext"].as_str().unwrap_or("");
-                    let recursive = args["recursive"].as_bool().unwrap_or(false);
-                    format!("{}{}{}", path, if recursive { " -R" } else { "" }, if ext.is_empty() { String::new() } else { format!(" *.{ext}") })
-                }
-                "search_text" => args["pattern"].as_str().unwrap_or("").to_string(),
-                "create_plan" => format!("{} steps", args["steps"].as_array().map(|a| a.len()).unwrap_or(0)),
-                "memory_recall" => args["query"].as_str().unwrap_or("").to_string(),
-                "memory_store" => args["key"].as_str().unwrap_or("").to_string(),
-                _ => serde_json::to_string(args).unwrap_or_default(),
-            };
-            let _ = writeln!(out, "{tag} {YELLOW}⚡ {name}{RESET} {}", truncate(&args_str, 100));
+            let detail = args.as_object()
+                .and_then(|o| o.values().next())
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let _ = writeln!(out, "{tag} {YELLOW}⚡ {name}{RESET} {}", detail);
         }
         "tool.result" => {
             let name = data["name"].as_str().unwrap_or("?");
             let result = data["result"].as_str().unwrap_or("");
-            let lines: Vec<&str> = result.lines().collect();
-            if lines.len() <= 3 {
-                let _ = writeln!(out, "{tag} {DIM}  ↳ {name}:{RESET} {}", truncate(result, 120));
-            } else {
-                let _ = writeln!(out, "{tag} {DIM}  ↳ {name}: ({} lines){RESET}", lines.len());
-                for line in lines.iter().take(5) {
-                    let _ = writeln!(out, "  {DIM}  {}{RESET}", truncate(line, 100));
-                }
-                if lines.len() > 5 {
-                    let _ = writeln!(out, "  {DIM}  ... ({} more){RESET}", lines.len() - 5);
-                }
+            let _ = writeln!(out, "{tag} {DIM}  ↳ {name}:{RESET}");
+            for line in result.lines() {
+                let _ = writeln!(out, "  {DIM}  {line}{RESET}");
             }
         }
-        "tool.status" => {}
-        "file" => {
-            let path = data["path"].as_str().unwrap_or("?");
-            let caption = data["caption"].as_str().unwrap_or("");
-            let _ = writeln!(out, "{DIM}📎 sending: {path}{}{RESET}", if caption.is_empty() { String::new() } else { format!(" — {caption}") });
-        }
-        "plan" => {
-            let steps = data["steps"].as_array();
-            if let Some(steps) = steps {
-                let _ = writeln!(out, "{tag} {BLUE}{BOLD}📋 Plan ({} steps){RESET}", steps.len());
-                for (i, step) in steps.iter().enumerate() {
-                    let _ = writeln!(out, "  {BLUE}{}. {}{RESET}", i + 1, step.as_str().unwrap_or("?"));
-                }
-            }
-        }
-        "step.start" => {
-            let idx = data["index"].as_u64().unwrap_or(0);
-            let total = data["total"].as_u64().unwrap_or(0);
-            let desc = data["description"].as_str().unwrap_or("");
-            let _ = writeln!(out, "\n{tag} {BOLD}▸ step {idx}/{total}{RESET} {desc}");
-        }
-        "step.end" => {
-            let idx = data["index"].as_u64().unwrap_or(0);
-            let result = data["result"].as_str().unwrap_or("");
-            let _ = writeln!(out, "{tag} {DIM}▸ step {idx} done:{RESET} {}", truncate(result, 120));
-        }
-        "supervise" => {
-            let action = data["action"].as_str().unwrap_or("?");
-            match action {
-                "complete" => { let _ = writeln!(out, "{tag} {GREEN}{BOLD}✓ complete{RESET}"); }
-                "needs_work" => {
-                    let feedback = data["feedback"].as_str().unwrap_or("?");
-                    let _ = writeln!(out, "{tag} {YELLOW}↻ needs work:{RESET} {}", truncate(feedback, 120));
-                }
-                _ => { let _ = writeln!(out, "{tag} {DIM}supervise: {action}{RESET}"); }
-            }
-        }
-        "text" => {}
         "done" => {
-            let content = data["content"].as_str().unwrap_or("");
-            let _ = writeln!(out, "\n{BOLD}━━━ Result ━━━{RESET}");
-            let _ = writeln!(out, "{content}");
-            let _ = writeln!(out, "{BOLD}━━━━━━━━━━━━━━{RESET}");
-        }
-        "context" => {
-            let mem = data["memory_hits"].as_u64().unwrap_or(0);
-            let sess = data["session_messages"].as_u64().unwrap_or(0);
-            let _ = writeln!(out, "{DIM}context: {mem} memories, {sess} session msgs{RESET}");
-        }
-        "memory" => {
-            let key = data["key"].as_str().unwrap_or("?");
-            let action = data["action"].as_str().unwrap_or("?");
-            let _ = writeln!(out, "{DIM}💾 memory {action}: {key}{RESET}");
+            let _ = writeln!(out, "{tag} {GREEN}{BOLD}✓ done{RESET}");
         }
         "error" => {
             let msg = data["message"].as_str().unwrap_or("?");
             let _ = writeln!(out, "{RED}{BOLD}✗ error:{RESET} {msg}");
         }
+        "text" | "tool.status" => {}
         _ => {
-            let _ = writeln!(out, "{tag} {DIM}{typ}: {}{RESET}", truncate(&data.to_string(), 100));
+            let _ = writeln!(out, "{tag} {DIM}{typ}{RESET}");
         }
     }
 }

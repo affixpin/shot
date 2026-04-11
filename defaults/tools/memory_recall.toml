@@ -1,0 +1,9 @@
+healthcheck = "which engram"
+name = "memory_recall"
+description = "Search memory for relevant facts, decisions, and patterns from previous sessions."
+command = 'engram search "$query"'
+
+[params.query]
+type = "string"
+description = "What to search for in memory"
+required = true

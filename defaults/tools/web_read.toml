@@ -1,0 +1,12 @@
+healthcheck = "test -n \"$JINA_API_KEY\""
+name = "web_read"
+description = "Read a web page and extract its content as markdown"
+command = 'curl -sS "https://r.jina.ai/$url" -H "Accept: text/markdown" -H "Authorization: Bearer $JINA_API_KEY"'
+
+[env]
+JINA_API_KEY = ""
+
+[params.url]
+type = "string"
+description = "URL to read"
+required = true

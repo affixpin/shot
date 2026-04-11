@@ -1,0 +1,14 @@
+healthcheck = "which engram"
+name = "memory_store"
+description = "Remember a fact for later. Use this to save decisions, discoveries, patterns, or anything worth recalling in future sessions."
+command = 'engram save "$title" "$content"'
+
+[params.title]
+type = "string"
+description = "Short searchable title (e.g. 'auth decision', 'db schema change')"
+required = true
+
+[params.content]
+type = "string"
+description = "Detailed content to remember"
+required = true

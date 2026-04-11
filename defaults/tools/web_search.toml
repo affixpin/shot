@@ -1,0 +1,12 @@
+healthcheck = "test -n \"$JINA_API_KEY\""
+name = "web_search"
+description = "Search the web and return results as markdown"
+command = 'curl -sS "https://s.jina.ai/$(printf "%s" "$query" | jq -sRr @uri)" -H "Accept: text/markdown" -H "Authorization: Bearer $JINA_API_KEY" -H "X-No-Cache: true"'
+
+[env]
+JINA_API_KEY = ""
+
+[params.query]
+type = "string"
+description = "Search query"
+required = true

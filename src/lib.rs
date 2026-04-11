@@ -1,11 +1,10 @@
-mod agent;
 pub mod config;
 pub mod emit;
-mod memory;
 mod react;
-mod roles;
+mod run;
 mod session;
-mod tools;
+pub mod setup;
+pub mod tools;
 
-pub use agent::run;
 pub use config::Config;
+pub use run::run;

@@ -14,43 +14,14 @@ impl Session {
         }
         let db = Connection::open(db_path)?;
 
-        let has_table: bool = db.query_row(
-            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='messages'",
-            [], |row| row.get::<_, i64>(0),
-        ).map(|c| c > 0).unwrap_or(false);
-
-        if !has_table {
-            db.execute_batch(
-                "CREATE TABLE messages (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    role TEXT NOT NULL,
-                    data TEXT NOT NULL,
-                    created_at TEXT DEFAULT (datetime('now'))
-                )"
-            )?;
-        } else {
-            // Migrate old schema: content → data
-            let has_data: bool = db.prepare("PRAGMA table_info(messages)")?
-                .query_map([], |row| row.get::<_, String>(1))?
-                .filter_map(|r| r.ok())
-                .any(|col| col == "data");
-
-            if !has_data {
-                db.execute_batch(
-                    "CREATE TABLE messages_new (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        role TEXT NOT NULL,
-                        data TEXT NOT NULL,
-                        created_at TEXT DEFAULT (datetime('now'))
-                    );
-                    INSERT INTO messages_new (id, role, data, created_at)
-                        SELECT id, role, json_object('role', role, 'content', content), created_at
-                        FROM messages;
-                    DROP TABLE messages;
-                    ALTER TABLE messages_new RENAME TO messages;"
-                )?;
-            }
-        }
+        db.execute_batch(
+            "CREATE TABLE IF NOT EXISTS messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                role TEXT NOT NULL,
+                data TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now'))
+            )"
+        )?;
 
         Ok(Self { db: Mutex::new(db), max_chars })
     }
@@ -91,5 +62,4 @@ impl Session {
             rusqlite::params![role, data],
         );
     }
-
 }

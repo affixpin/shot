@@ -1,0 +1,13 @@
+healthcheck = "which grep"
+name = "search_text"
+description = "Search for a text pattern in files"
+command = 'grep -rn "$pattern" "${path:-.}" 2>/dev/null | head -50'
+
+[params.pattern]
+type = "string"
+description = "Text or regex pattern to search for"
+required = true
+
+[params.path]
+type = "string"
+description = "Directory to search in (default: current directory)"

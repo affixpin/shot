@@ -240,11 +240,12 @@ pub struct ReactConfig {
     pub api_key: String,
     pub model: String,
     pub max_turns: usize,
-    pub reasoning_effort: String,
+    pub reasoning_effort: Option<String>,
 }
 
 pub struct ReactResult {
     pub response: String,
+    pub messages: Vec<Message>,
 }
 
 pub async fn run(
@@ -269,7 +270,7 @@ pub async fn run(
                 stream: true,
                 tools: if has_tools { Some(tool_defs.clone()) } else { None },
                 tool_choice: None,
-                reasoning_effort: Some(config.reasoning_effort.clone()),
+                reasoning_effort: config.reasoning_effort.clone(),
             })
             .send().await?;
 
@@ -308,6 +309,7 @@ pub async fn run(
 
             return Ok(ReactResult {
                 response: result.content,
+                messages,
             });
         }
 
@@ -327,6 +329,7 @@ pub async fn run(
         if tools.should_stop() {
             return Ok(ReactResult {
                 response: result.content,
+                messages,
             });
         }
     }

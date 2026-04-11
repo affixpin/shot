@@ -1,0 +1,9 @@
+healthcheck = "which sh"
+name = "shell"
+description = "Execute a shell command"
+command = 'eval "$command"'
+
+[params.command]
+type = "string"
+description = "Shell command to execute"
+required = true
