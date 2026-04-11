@@ -17,6 +17,8 @@ const DEFAULT_TOOLS: &[(&str, &str)] = &[
     ("memory_recall.toml", include_str!("../defaults/tools/memory_recall.toml")),
     ("web_search.toml", include_str!("../defaults/tools/web_search.toml")),
     ("web_read.toml", include_str!("../defaults/tools/web_read.toml")),
+    ("tg_poll.toml", include_str!("../defaults/tools/tg_poll.toml")),
+    ("tg_send.toml", include_str!("../defaults/tools/tg_send.toml")),
 ];
 
 struct ProviderTemplate {
