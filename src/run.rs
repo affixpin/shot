@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::emit;
-use crate::react::{self, Message, ReactConfig, ReactHandler};
+use crate::react::{self, Message, ReactConfig, ReactHandler, Usage};
 use crate::session::Session;
 use crate::tools::ExternalTools;
 
@@ -28,8 +28,15 @@ impl ReactHandler for EventHandler {
         emit::emit("tool.call", &self.actor, &self.color, serde_json::json!({"name": name, "args": args}));
     }
     fn on_tool_result(&self, name: &str, result: &str) {
-        let truncated = if result.len() > 2000 { &result[..2000] } else { result };
-        emit::emit("tool.result", &self.actor, &self.color, serde_json::json!({"name": name, "result": truncated}));
+        emit::emit("tool.result", &self.actor, &self.color, serde_json::json!({"name": name, "result": result}));
+    }
+    fn on_turn_complete(&self, turn: usize, message_count: usize, usage: &Usage) {
+        emit::emit("turn.complete", &self.actor, &self.color, serde_json::json!({
+            "turn": turn, "messages": message_count,
+            "total_tokens": usage.total_tokens,
+            "prompt_tokens": usage.prompt_tokens,
+            "completion_tokens": usage.completion_tokens,
+        }));
     }
 }
 
@@ -44,7 +51,6 @@ pub async fn run(
 ) -> Result<String, Box<dyn std::error::Error>> {
     let actor = role_name.unwrap_or("shot");
 
-    // Resolve role from config
     let role = match role_name {
         Some(name) => config.roles.get(name)
             .ok_or_else(|| format!("Unknown role: {name}"))?.clone(),
@@ -52,7 +58,6 @@ pub async fn run(
             .ok_or("No 'default' role in config. Add [agent.roles.default] to agent.toml")?.clone(),
     };
 
-    // Load session
     let session = session_path.map(|p| {
         Session::open(p, 200_000).expect("Failed to open session")
     });
@@ -63,7 +68,6 @@ pub async fn run(
     let tools = ExternalTools::load(&config.tools_dir, &role.tools);
     let handler = EventHandler { actor: actor.into(), color: role.color.clone() };
 
-    // Build system prompt: soul + role prompt
     let mut system = String::new();
     if !config.soul_prompt.is_empty() {
         system.push_str(&config.soul_prompt);
@@ -89,15 +93,13 @@ pub async fn run(
 
     let result = react::run(&react_config, &tools, messages, &handler).await?;
 
-    // Save new messages (after system + session history) to session
     if let Some(ref s) = session {
-        // Skip: system prompt (1) + session history (session_len)
         let new_start = 1 + session_len;
         for msg in result.messages.iter().skip(new_start) {
             s.push(msg);
         }
     }
 
-    emit::emit("done", actor, &role.color, serde_json::json!({}));
+    emit::emit("done", actor, &role.color, serde_json::json!({"total_tokens": result.total_tokens}));
     Ok(result.response)
 }

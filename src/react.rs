@@ -71,6 +71,18 @@ pub struct FunctionCall {
     pub arguments: String,
 }
 
+// ── Usage ──────────────────────────────────────────────────────────────
+
+#[derive(Clone, Default, Deserialize)]
+pub struct Usage {
+    #[serde(default)]
+    pub prompt_tokens: u64,
+    #[serde(default)]
+    pub completion_tokens: u64,
+    #[serde(default)]
+    pub total_tokens: u64,
+}
+
 // ── Traits ──────────────────────────────────────────────────────────────
 
 pub trait ToolExecutor: Send + Sync {
@@ -80,13 +92,10 @@ pub trait ToolExecutor: Send + Sync {
         &self, name: &str, args: &serde_json::Value,
     ) -> impl std::future::Future<Output = String> + Send;
 
-    /// Called when the model produces no tool calls.
-    /// Return Some(reminder) to inject a user message and force continuation.
     fn continuation_check(&self) -> Option<String> {
         None
     }
 
-    /// Called after tool execution. Return true to stop the loop immediately.
     fn should_stop(&self) -> bool {
         false
     }
@@ -100,12 +109,17 @@ pub trait ReactHandler {
     fn on_text(&self, _text: &str) {}
     fn on_tool_call(&self, _name: &str, _args: &serde_json::Value) {}
     fn on_tool_result(&self, _name: &str, _result: &str) {}
+    fn on_turn_complete(&self, _turn: usize, _message_count: usize, _usage: &Usage) {}
 }
 
 // ── Streaming SSE types ─────────────────────────────────────────────────
 
 #[derive(Deserialize)]
-struct StreamChunk { choices: Vec<StreamChoice> }
+struct StreamChunk {
+    choices: Vec<StreamChoice>,
+    #[serde(default)]
+    usage: Option<Usage>,
+}
 
 #[derive(Deserialize)]
 struct StreamChoice { delta: StreamDelta }
@@ -141,6 +155,7 @@ struct StreamFunction {
 struct StreamResult {
     content: String,
     tool_calls: Vec<ToolCall>,
+    usage: Usage,
 }
 
 async fn read_stream(
@@ -152,6 +167,7 @@ async fn read_stream(
     let mut tc_names: Vec<String> = vec![];
     let mut tc_args: Vec<String> = vec![];
     let mut tc_extras: Vec<serde_json::Map<String, serde_json::Value>> = vec![];
+    let mut usage = Usage::default();
 
     let mut stream = resp.bytes_stream();
     let mut buffer = String::new();
@@ -172,6 +188,10 @@ async fn read_stream(
                 Ok(c) => c,
                 Err(_) => continue,
             };
+
+            if let Some(u) = chunk.usage {
+                usage = u;
+            }
 
             for choice in &chunk.choices {
                 if let Some(ref text) = choice.delta.content {
@@ -216,10 +236,15 @@ async fn read_stream(
         })
         .collect();
 
-    Ok(StreamResult { content, tool_calls })
+    Ok(StreamResult { content, tool_calls, usage })
 }
 
 // ── ReAct loop ──────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct StreamOptions {
+    include_usage: bool,
+}
 
 #[derive(Serialize)]
 struct ChatRequest {
@@ -227,6 +252,7 @@ struct ChatRequest {
     model: Option<String>,
     messages: Vec<Message>,
     stream: bool,
+    stream_options: StreamOptions,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<ToolDef>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -246,6 +272,7 @@ pub struct ReactConfig {
 pub struct ReactResult {
     pub response: String,
     pub messages: Vec<Message>,
+    pub total_tokens: u64,
 }
 
 pub async fn run(
@@ -257,6 +284,7 @@ pub async fn run(
     let client = reqwest::Client::new();
     let tool_defs = tools.definitions();
     let has_tools = !tool_defs.is_empty();
+    let mut total_tokens: u64 = 0;
 
     for turn in 0..config.max_turns {
         handler.on_llm_request(turn, messages.len());
@@ -268,6 +296,7 @@ pub async fn run(
                 model: Some(config.model.clone()),
                 messages: messages.clone(),
                 stream: true,
+                stream_options: StreamOptions { include_usage: true },
                 tools: if has_tools { Some(tool_defs.clone()) } else { None },
                 tool_choice: None,
                 reasoning_effort: config.reasoning_effort.clone(),
@@ -282,6 +311,8 @@ pub async fn run(
         }
 
         let mut result = read_stream(resp, handler).await?;
+        total_tokens += result.usage.total_tokens;
+
         handler.on_llm_response(turn, &result.content, result.tool_calls.len());
 
         // Normalize tool call arguments before adding to history
@@ -307,10 +338,8 @@ pub async fn run(
                 continue;
             }
 
-            return Ok(ReactResult {
-                response: result.content,
-                messages,
-            });
+            handler.on_turn_complete(turn, messages.len(), &result.usage);
+            return Ok(ReactResult { response: result.content, messages, total_tokens });
         }
 
         // Execute tool calls
@@ -326,11 +355,10 @@ pub async fn run(
             messages.push(tool_msg);
         }
 
+        handler.on_turn_complete(turn, messages.len(), &result.usage);
+
         if tools.should_stop() {
-            return Ok(ReactResult {
-                response: result.content,
-                messages,
-            });
+            return Ok(ReactResult { response: result.content, messages, total_tokens });
         }
     }
 

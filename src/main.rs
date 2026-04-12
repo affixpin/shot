@@ -19,13 +19,21 @@ struct Cli {
     /// Message / scope instruction
     message: Vec<String>,
 
+    /// Quiet mode (no status output, just result)
+    #[arg(short, long)]
+    quiet: bool,
+
     /// Verbose output (JSON events to stdout)
     #[arg(short, long)]
     verbose: bool,
 
-    /// Pretty output (colored events to stderr)
+    /// Debug output (detailed events to stderr)
     #[arg(short, long)]
-    pretty: bool,
+    debug: bool,
+
+    /// Show full tool output (no truncation)
+    #[arg(short, long)]
+    full: bool,
 }
 
 #[derive(Subcommand)]
@@ -87,10 +95,15 @@ async fn main() {
         None => {}
     }
 
-    if cli.pretty {
-        shotclaw::emit::set_pretty();
+    if cli.quiet {
+        shotclaw::emit::set_quiet();
     } else if cli.verbose {
         shotclaw::emit::set_verbose();
+    } else if cli.debug {
+        shotclaw::emit::set_debug();
+    }
+    if cli.full {
+        shotclaw::emit::set_full();
     }
 
     let arg_msg = cli.message.join(" ");
@@ -128,7 +141,13 @@ async fn main() {
     let config = shotclaw::Config::load();
 
     match shotclaw::run(&config, cli.role.as_deref(), session_path.as_deref(), &context, &message).await {
-        Ok(result) => println!("{result}"),
+        Ok(result) => {
+            if cli.quiet || cli.verbose || !std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+                println!("{result}");
+            } else {
+                termimad::print_text(&result);
+            }
+        }
         Err(e) => {
             eprintln!("Error: {e}");
             std::process::exit(1);
