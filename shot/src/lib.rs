@@ -1,7 +1,7 @@
 pub mod config;
 pub mod emit;
 mod react;
-mod run;
+pub mod run;
 mod session;
 pub mod setup;
 pub mod tools;

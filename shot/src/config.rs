@@ -20,8 +20,6 @@ struct AgentConfig {
     tools_dir: String,
     #[serde(default = "default_max_turns")]
     max_turns: usize,
-    #[serde(default)]
-    roles: HashMap<String, RoleConfigFile>,
 }
 
 fn default_max_turns() -> usize { 50 }
@@ -35,26 +33,7 @@ struct ProviderConfig {
     reasoning: Option<String>,
 }
 
-#[derive(Clone, Deserialize)]
-struct RoleConfigFile {
-    #[serde(default)]
-    prompt: String,
-    #[serde(default)]
-    tools: Vec<String>,
-    #[serde(default = "default_color")]
-    color: String,
-}
-
-fn default_color() -> String { "white".into() }
-
 // ── Public types ───────────────────────────────────────────────────────
-
-#[derive(Clone)]
-pub struct RoleConfig {
-    pub prompt: String,
-    pub tools: Vec<String>,
-    pub color: String,
-}
 
 pub struct Config {
     pub llm_url: String,
@@ -64,7 +43,6 @@ pub struct Config {
     pub soul_prompt: String,
     pub max_turns: usize,
     pub tools_dir: String,
-    pub roles: HashMap<String, RoleConfig>,
 }
 
 // ── Paths ──────────────────────────────────────────────────────────────
@@ -117,14 +95,6 @@ impl Config {
             resolve(&data_dir, &file.agent.tools_dir)
         };
 
-        let roles = file.agent.roles.into_iter().map(|(name, rc)| {
-            (name, RoleConfig {
-                prompt: rc.prompt,
-                tools: rc.tools,
-                color: rc.color,
-            })
-        }).collect();
-
         Self {
             llm_url: provider.llm_url,
             api_key: provider.api_key,
@@ -135,7 +105,6 @@ impl Config {
             },
             max_turns: file.agent.max_turns,
             tools_dir,
-            roles,
         }
     }
 }

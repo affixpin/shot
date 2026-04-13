@@ -1,0 +1,19 @@
+healthcheck = "test -n \"$tg_bot_token\""
+name = "tg_send"
+description = "Send a message to a Telegram chat"
+command = 'curl -s "https://api.telegram.org/bot$tg_bot_token/sendMessage" -d "chat_id=$chat_id" --data-urlencode "text=$message" | jq -r "if .ok then \"Sent to \" + (.result.chat.id | tostring) else \"Error: \" + .description end"'
+
+[vars.tg_bot_token]
+description = "Telegram bot token"
+required = true
+hide = true
+
+[vars.chat_id]
+type = "string"
+description = "Telegram chat ID to send message to"
+required = true
+
+[vars.message]
+type = "string"
+description = "Message text to send"
+required = true

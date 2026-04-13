@@ -82,9 +82,7 @@ fn format_tokens(n: u64) -> String {
 fn format_cost(prompt: u64, completion: u64) -> String {
     // Default pricing: Gemini 3 Flash ($0.10/1M in, $0.40/1M out)
     let cost = (prompt as f64 * 0.10 + completion as f64 * 0.40) / 1_000_000.0;
-    if cost < 0.0001 { return String::new(); }
-    if cost < 0.01 { format!(", ${:.4}", cost) }
-    else { format!(", ${:.3}", cost) }
+    format!(", ${cost}")
 }
 
 // ── Pretty print (default) — minimal ───────────────────────────────────
@@ -131,9 +129,7 @@ fn pretty_print(event: &serde_json::Value) {
             let cum_total = cum_prompt + cum_completion;
 
             let turn_str = if tokens > 0 { format_tokens(tokens) } else { format!("{msgs} msgs") };
-            let total_str = if cum_total > 0 && turn > 0 {
-                format!(" (total: {}{})", format_tokens(cum_total), format_cost(cum_prompt, cum_completion))
-            } else { String::new() };
+            let total_str = format!(" (total: {}{})", format_tokens(cum_total), format_cost(cum_prompt, cum_completion));
 
             let _ = writeln!(out, "{BROWN}← turn {}, {}{}{}{RESET}",
                 turn + 1, turn_str, format_cost(prompt, completion), total_str,

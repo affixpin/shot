@@ -1,0 +1,7 @@
+name = "telegram"
+listen = 'OFFSET=$(cat /tmp/shot_tg_offset 2>/dev/null || echo 0) && result=$(curl -s "https://api.telegram.org/bot$tg_bot_token/getUpdates?offset=$OFFSET&timeout=30") && echo "$result" | jq -c ".result[]" | while read -r u; do echo $(($(echo "$u" | jq ".update_id") + 1)) > /tmp/shot_tg_offset; chat_id=$(echo "$u" | jq -r ".message.chat.id"); text=$(echo "$u" | jq -r ".message.text // empty"); [ -n "$text" ] && echo "$chat_id $text"; done'
+interval = 1
+
+[vars.tg_bot_token]
+description = "Telegram bot token"
+required = true

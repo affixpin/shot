@@ -3,6 +3,7 @@ use crate::emit;
 use crate::react::{self, Message, ReactConfig, ReactHandler, Usage};
 use crate::session::Session;
 use crate::tools::ExternalTools;
+use std::collections::HashMap;
 
 // ── Event handler ──────────────────────────────────────────────────────
 
@@ -40,40 +41,48 @@ impl ReactHandler for EventHandler {
     }
 }
 
+// ── Run options ────────────────────────────────────────────────────────
+
+pub struct RunOptions<'a> {
+    pub session_path: Option<&'a str>,
+    pub context: &'a str,
+    pub message: &'a str,
+    /// If Some, only load these tools. If None, load all from tools_dir.
+    pub enabled_tools: Option<Vec<String>>,
+    /// Per-tool var overrides from CLI flags.
+    pub tool_overrides: HashMap<String, HashMap<String, String>>,
+    /// Override the system prompt. If None, use SOUL.md from config.
+    pub prompt_override: Option<String>,
+}
+
 // ── Run ────────────────────────────────────────────────────────────────
 
 pub async fn run(
     config: &Config,
-    role_name: Option<&str>,
-    session_path: Option<&str>,
-    context: &str,
-    message: &str,
+    opts: RunOptions<'_>,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let actor = role_name.unwrap_or("shot");
+    let actor = "shot";
+    let color = "blue";
 
-    let role = match role_name {
-        Some(name) => config.roles.get(name)
-            .ok_or_else(|| format!("Unknown role: {name}"))?.clone(),
-        None => config.roles.get("default")
-            .ok_or("No 'default' role in config. Add [agent.roles.default] to agent.toml")?.clone(),
-    };
-
-    let session = session_path.map(|p| {
+    let session = opts.session_path.map(|p| {
         Session::open(p, 200_000).expect("Failed to open session")
     });
     let session_history = session.as_ref()
         .map(|s| s.recent())
         .unwrap_or_default();
 
-    let tools = ExternalTools::load(&config.tools_dir, &role.tools);
-    let handler = EventHandler { actor: actor.into(), color: role.color.clone() };
+    let tools = ExternalTools::load(
+        &config.tools_dir,
+        opts.enabled_tools.as_deref(),
+        &opts.tool_overrides,
+    );
+    let handler = EventHandler { actor: actor.into(), color: color.into() };
 
-    let mut system = String::new();
-    if !config.soul_prompt.is_empty() {
-        system.push_str(&config.soul_prompt);
-        system.push_str("\n\n");
-    }
-    system.push_str(&role.prompt);
+    // System prompt: --prompt override > SOUL.md > empty
+    let system = match opts.prompt_override {
+        Some(p) => p,
+        None => config.soul_prompt.clone(),
+    };
 
     let react_config = ReactConfig {
         llm_url: config.llm_url.clone(),
@@ -86,10 +95,10 @@ pub async fn run(
     let mut messages = vec![Message::system(&system)];
     let session_len = session_history.len();
     messages.extend(session_history);
-    if !context.is_empty() {
-        messages.push(Message::user(format!("<context>\n{context}\n</context>")));
+    if !opts.context.is_empty() {
+        messages.push(Message::user(format!("<context>\n{}\n</context>", opts.context)));
     }
-    messages.push(Message::user(message));
+    messages.push(Message::user(opts.message));
 
     let result = react::run(&react_config, &tools, messages, &handler).await?;
 
@@ -100,6 +109,6 @@ pub async fn run(
         }
     }
 
-    emit::emit("done", actor, &role.color, serde_json::json!({"total_tokens": result.total_tokens}));
+    emit::emit("done", actor, color, serde_json::json!({"total_tokens": result.total_tokens}));
     Ok(result.response)
 }

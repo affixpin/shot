@@ -3,12 +3,12 @@ name = "file_write"
 description = "Write content to a file"
 command = 'printf "%s" "$content" > "$path" && echo "Written to $path"'
 
-[params.path]
+[vars.path]
 type = "string"
 description = "File path to write"
 required = true
 
-[params.content]
+[vars.content]
 type = "string"
 description = "Content to write"
 required = true

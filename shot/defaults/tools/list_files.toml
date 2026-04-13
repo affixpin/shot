@@ -3,6 +3,6 @@ name = "list_files"
 description = "List files in a directory"
 command = 'ls -la "${path:-.}"'
 
-[params.path]
+[vars.path]
 type = "string"
 description = "Directory path (default: current directory)"
