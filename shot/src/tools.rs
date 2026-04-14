@@ -171,6 +171,17 @@ pub struct ExternalTools {
 }
 
 impl ExternalTools {
+    pub fn is_empty(&self) -> bool {
+        self.tools.is_empty()
+    }
+
+    /// Return a list of (name, description) for all loaded tools.
+    pub fn descriptions(&self) -> Vec<(String, String)> {
+        self.tools.iter()
+            .map(|t| (t.name.clone(), t.description.clone()))
+            .collect()
+    }
+
     /// Load tools from disk.
     /// - `enabled`: if Some, only load tools with these names. If None, load all *.toml files.
     /// - `overrides`: per-tool var overrides from CLI flags.
@@ -226,21 +237,7 @@ impl ExternalTools {
                 }
             }
 
-            // Check that all hidden+required vars have a value (either fixed or default)
-            let mut missing_hidden = Vec::new();
-            for (var_name, var) in &spec.vars {
-                if var.hide && var.required
-                    && !spec.fixed_vars.contains_key(var_name)
-                    && var.default.is_none()
-                {
-                    missing_hidden.push(var_name.clone());
-                }
-            }
-            if !missing_hidden.is_empty() {
-                continue;
-            }
-
-            // Healthcheck
+            // Healthcheck — skip unhealthy tools
             if let Some(ref check) = spec.healthcheck {
                 let mut cmd = std::process::Command::new("sh");
                 cmd.arg("-c").arg(check);
@@ -258,7 +255,7 @@ impl ExternalTools {
     }
 }
 
-pub fn healthcheck_all(tools_dir: &str, overrides: &HashMap<String, HashMap<String, String>>) {
+pub fn toolscheck_all(tools_dir: &str, overrides: &HashMap<String, HashMap<String, String>>) {
     let dir = std::path::Path::new(tools_dir);
     let mut entries: Vec<_> = std::fs::read_dir(dir)
         .into_iter()
@@ -273,11 +270,11 @@ pub fn healthcheck_all(tools_dir: &str, overrides: &HashMap<String, HashMap<Stri
         let name = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
         let content = match std::fs::read_to_string(&path) {
             Ok(c) => c,
-            Err(_) => { println!("  ? {name}  (unreadable)"); continue; }
+            Err(_) => { println!("? {name}  (unreadable)"); continue; }
         };
         let mut spec: ToolSpec = match toml::from_str(&content) {
             Ok(s) => s,
-            Err(e) => { println!("  ? {name}  (parse error: {e})"); continue; }
+            Err(e) => { println!("? {name}  (parse error: {e})"); continue; }
         };
 
         // Apply TOML `value` fields
@@ -294,7 +291,7 @@ pub fn healthcheck_all(tools_dir: &str, overrides: &HashMap<String, HashMap<Stri
         }
 
         match &spec.healthcheck {
-            None => println!("  \x1b[32m✓\x1b[0m {name}  (no healthcheck)"),
+            None => println!("\x1b[32m✓\x1b[0m {name}  (no healthcheck)"),
             Some(check) => {
                 let mut cmd = std::process::Command::new("sh");
                 cmd.arg("-c").arg(check);
@@ -303,9 +300,9 @@ pub fn healthcheck_all(tools_dir: &str, overrides: &HashMap<String, HashMap<Stri
                 spec.apply_env_sync(&mut cmd);
                 let ok = cmd.status().map(|s| s.success()).unwrap_or(false);
                 if ok {
-                    println!("  \x1b[32m✓\x1b[0m {name}");
+                    println!("\x1b[32m✓\x1b[0m {name}");
                 } else {
-                    println!("  \x1b[31m✗\x1b[0m {name}  ({check})");
+                    println!("\x1b[31m✗\x1b[0m {name}  ({check})");
                 }
             }
         }

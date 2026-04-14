@@ -7,32 +7,29 @@ use std::collections::HashMap;
 
 // ── Event handler ──────────────────────────────────────────────────────
 
-struct EventHandler {
-    actor: String,
-    color: String,
-}
+struct EventHandler;
 
 impl ReactHandler for EventHandler {
     fn on_llm_request(&self, turn: usize, message_count: usize) {
-        emit::emit("llm.request", &self.actor, &self.color, serde_json::json!({"turn": turn, "messages": message_count}));
+        emit::emit("llm.request", serde_json::json!({"turn": turn, "messages": message_count}));
     }
     fn on_llm_response(&self, turn: usize, content: &str, tool_call_count: usize) {
-        emit::emit("llm.response", &self.actor, &self.color, serde_json::json!({"turn": turn, "content": content, "tool_calls": tool_call_count}));
+        emit::emit("llm.response", serde_json::json!({"turn": turn, "content": content, "tool_calls": tool_call_count}));
     }
     fn on_llm_error(&self, turn: usize, error: &str) {
-        emit::emit("llm.error", &self.actor, &self.color, serde_json::json!({"turn": turn, "error": error}));
+        emit::emit("llm.error", serde_json::json!({"turn": turn, "error": error}));
     }
     fn on_text(&self, text: &str) {
-        emit::emit("text", &self.actor, &self.color, serde_json::json!({"content": text}));
+        emit::emit("text", serde_json::json!({"content": text}));
     }
     fn on_tool_call(&self, name: &str, args: &serde_json::Value) {
-        emit::emit("tool.call", &self.actor, &self.color, serde_json::json!({"name": name, "args": args}));
+        emit::emit("tool.call", serde_json::json!({"name": name, "args": args}));
     }
     fn on_tool_result(&self, name: &str, result: &str) {
-        emit::emit("tool.result", &self.actor, &self.color, serde_json::json!({"name": name, "result": result}));
+        emit::emit("tool.result", serde_json::json!({"name": name, "result": result}));
     }
     fn on_turn_complete(&self, turn: usize, message_count: usize, usage: &Usage) {
-        emit::emit("turn.complete", &self.actor, &self.color, serde_json::json!({
+        emit::emit("turn.complete", serde_json::json!({
             "turn": turn, "messages": message_count,
             "total_tokens": usage.total_tokens,
             "prompt_tokens": usage.prompt_tokens,
@@ -45,14 +42,15 @@ impl ReactHandler for EventHandler {
 
 pub struct RunOptions<'a> {
     pub session_path: Option<&'a str>,
-    pub context: &'a str,
     pub message: &'a str,
     /// If Some, only load these tools. If None, load all from tools_dir.
     pub enabled_tools: Option<Vec<String>>,
     /// Per-tool var overrides from CLI flags.
     pub tool_overrides: HashMap<String, HashMap<String, String>>,
-    /// Override the system prompt. If None, use SOUL.md from config.
-    pub prompt_override: Option<String>,
+    /// Replace the soul (base personality). If None, use SOUL.md from config.
+    pub soul_override: Option<String>,
+    /// Append additional instructions to the soul.
+    pub prompt_addition: Option<String>,
 }
 
 // ── Run ────────────────────────────────────────────────────────────────
@@ -61,9 +59,6 @@ pub async fn run(
     config: &Config,
     opts: RunOptions<'_>,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let actor = "shot";
-    let color = "blue";
-
     let session = opts.session_path.map(|p| {
         Session::open(p, 200_000).expect("Failed to open session")
     });
@@ -76,13 +71,27 @@ pub async fn run(
         opts.enabled_tools.as_deref(),
         &opts.tool_overrides,
     );
-    let handler = EventHandler { actor: actor.into(), color: color.into() };
+    let handler = EventHandler;
 
-    // System prompt: --prompt override > SOUL.md > empty
-    let system = match opts.prompt_override {
-        Some(p) => p,
-        None => config.soul_prompt.clone(),
-    };
+    // System prompt = (soul override OR SOUL.md) + (optional prompt addition)
+    let mut system = opts.soul_override.unwrap_or_else(|| config.soul_prompt.clone());
+    if let Some(addition) = opts.prompt_addition {
+        if !system.is_empty() { system.push_str("\n\n"); }
+        system.push_str(&addition);
+    }
+
+    // Append dynamic tool list
+    let tool_descs = tools.descriptions();
+    if tool_descs.is_empty() {
+        if !system.is_empty() { system.push_str("\n\n"); }
+        system.push_str("You currently have NO tools available. Answer directly from your knowledge. Do NOT claim to have any tools, do NOT pretend to call any. If you cannot answer something, say so honestly.");
+    } else {
+        if !system.is_empty() { system.push_str("\n\n"); }
+        system.push_str("## Available tools\n\n");
+        for (name, desc) in &tool_descs {
+            system.push_str(&format!("- `{name}`: {desc}\n"));
+        }
+    }
 
     let react_config = ReactConfig {
         llm_url: config.llm_url.clone(),
@@ -95,9 +104,6 @@ pub async fn run(
     let mut messages = vec![Message::system(&system)];
     let session_len = session_history.len();
     messages.extend(session_history);
-    if !opts.context.is_empty() {
-        messages.push(Message::user(format!("<context>\n{}\n</context>", opts.context)));
-    }
     messages.push(Message::user(opts.message));
 
     let result = react::run(&react_config, &tools, messages, &handler).await?;
@@ -109,6 +115,6 @@ pub async fn run(
         }
     }
 
-    emit::emit("done", actor, color, serde_json::json!({"total_tokens": result.total_tokens}));
+    emit::emit("done", serde_json::json!({"total_tokens": result.total_tokens}));
     Ok(result.response)
 }

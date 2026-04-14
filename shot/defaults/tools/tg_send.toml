@@ -1,9 +1,9 @@
-healthcheck = "test -n \"$tg_bot_token\""
+healthcheck = "test -n \"$bot_token\""
 name = "tg_send"
 description = "Send a message to a Telegram chat"
-command = 'curl -s "https://api.telegram.org/bot$tg_bot_token/sendMessage" -d "chat_id=$chat_id" --data-urlencode "text=$message" | jq -r "if .ok then \"Sent to \" + (.result.chat.id | tostring) else \"Error: \" + .description end"'
+command = 'curl -s "https://api.telegram.org/bot$bot_token/sendMessage" -d "chat_id=$chat_id" --data-urlencode "text=$message" | jq -r "if .ok then \"Sent to \" + (.result.chat.id | tostring) else \"Error: \" + .description end"'
 
-[vars.tg_bot_token]
+[vars.bot_token]
 description = "Telegram bot token"
 required = true
 hide = true

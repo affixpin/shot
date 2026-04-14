@@ -14,13 +14,21 @@ struct Cli {
     #[arg(short, long, num_args = 0..=1, require_equals = true, default_missing_value = "")]
     session: Option<String>,
 
-    /// Override the system prompt for this invocation
+    /// Append additional instructions to the system prompt
     #[arg(long)]
     prompt: Option<String>,
 
-    /// Override the system prompt with content from a file
+    /// Append instructions from a file to the system prompt
     #[arg(long)]
     prompt_file: Option<String>,
+
+    /// Replace the soul (base personality) — overrides SOUL.md
+    #[arg(long)]
+    soul: Option<String>,
+
+    /// Replace the soul with content from a file
+    #[arg(long)]
+    soul_file: Option<String>,
 
     /// Message / scope instruction
     message: Vec<String>,
@@ -29,13 +37,9 @@ struct Cli {
     #[arg(short, long)]
     quiet: bool,
 
-    /// Verbose output (JSON events to stdout)
+    /// JSON output (structured events to stdout, one per line)
     #[arg(short, long)]
-    verbose: bool,
-
-    /// Debug output (detailed events to stderr)
-    #[arg(short, long)]
-    debug: bool,
+    json: bool,
 
     /// Show full tool output (no truncation)
     #[arg(short, long)]
@@ -62,8 +66,8 @@ enum Command {
     Reset {
         session: String,
     },
-    /// Check which tools are available
-    Healthcheck,
+    /// List tools with their healthcheck status
+    Tools,
 }
 
 fn sessions_dir() -> PathBuf {
@@ -82,8 +86,10 @@ fn resolve_session_key(key: &str) -> String {
     }
 }
 
-fn print_result(result: &str, quiet: bool, verbose: bool) {
-    if quiet || verbose || !io::stdout().is_terminal() {
+fn print_result(result: &str, quiet: bool, json: bool) {
+    // In JSON mode, the result is already in the event stream — don't print separately
+    if json { return; }
+    if quiet || !io::stdout().is_terminal() {
         println!("{result}");
     } else {
         termimad::print_text(result);
@@ -147,7 +153,7 @@ async fn main() {
 
     let cli = Cli::parse_from(raw_args);
 
-    // -A means load all tools, otherwise load only explicitly listed (empty = none)
+    // --tools = all tools, --tools.X = specific tools, neither = no tools
     let enabled_tools = if cli.all_tools {
         None
     } else {
@@ -159,9 +165,9 @@ async fn main() {
             shotclaw::setup::configure(&provider, &api_key);
             return;
         }
-        Some(Command::Healthcheck) => {
+        Some(Command::Tools) => {
             let config = shotclaw::Config::load();
-            shotclaw::tools::healthcheck_all(&config.tools_dir, &tool_overrides);
+            shotclaw::tools::toolscheck_all(&config.tools_dir, &tool_overrides);
             return;
         }
         Some(Command::Reset { session }) => {
@@ -179,10 +185,8 @@ async fn main() {
 
     if cli.quiet {
         shotclaw::emit::set_quiet();
-    } else if cli.verbose {
-        shotclaw::emit::set_verbose();
-    } else if cli.debug {
-        shotclaw::emit::set_debug();
+    } else if cli.json {
+        shotclaw::emit::set_json();
     }
     if cli.full {
         shotclaw::emit::set_full();
@@ -198,24 +202,28 @@ async fn main() {
         dir.join(format!("{key}.db")).to_string_lossy().to_string()
     });
 
-    // Resolve prompt override
-    let prompt_override = if let Some(p) = cli.prompt {
-        Some(p)
-    } else if let Some(path) = cli.prompt_file {
-        Some(std::fs::read_to_string(&path).unwrap_or_else(|e| {
-            eprintln!("Error reading prompt file {path}: {e}");
+    fn read_or_die(path: &str) -> String {
+        std::fs::read_to_string(path).unwrap_or_else(|e| {
+            eprintln!("Error reading {path}: {e}");
             std::process::exit(1);
-        }))
-    } else {
-        None
-    };
+        })
+    }
+
+    // Soul override (replaces SOUL.md): --soul wins over --soul-file
+    let soul_override = cli.soul
+        .or_else(|| cli.soul_file.as_deref().map(read_or_die));
+
+    // Prompt addition (appended to soul): --prompt wins over --prompt-file
+    let prompt_addition = cli.prompt
+        .or_else(|| cli.prompt_file.as_deref().map(read_or_die));
 
     let config = shotclaw::Config::load();
 
-    // Pipe mode: read stdin line by line, process each
+    // Pipe mode: each stdin line is a message. Args not allowed.
     if cli.pipe {
-        if arg_msg.is_empty() {
-            eprintln!("Error: --pipe requires a message argument");
+        if !arg_msg.is_empty() {
+            eprintln!("Error: --pipe does not accept message arguments");
+            eprintln!("Usage: <source> | shot --pipe");
             std::process::exit(1);
         }
 
@@ -229,22 +237,22 @@ async fn main() {
 
             let opts = RunOptions {
                 session_path: session_path.as_deref(),
-                context: &line,
-                message: &arg_msg,
+                message: &line,
                 enabled_tools: enabled_tools.clone(),
                 tool_overrides: tool_overrides.clone(),
-                prompt_override: prompt_override.clone(),
+                soul_override: soul_override.clone(),
+                prompt_addition: prompt_addition.clone(),
             };
 
             match shotclaw::run(&config, opts).await {
-                Ok(result) => print_result(&result, cli.quiet, cli.verbose),
+                Ok(result) => print_result(&result, cli.quiet, cli.json),
                 Err(e) => eprintln!("Error: {e}"),
             }
         }
         return;
     }
 
-    // Normal mode: read all stdin at once
+    // Normal mode: message = args XOR stdin
     let stdin_data = if !io::stdin().is_terminal() {
         let mut buf = String::new();
         io::stdin().read_to_string(&mut buf).unwrap_or_default();
@@ -253,29 +261,32 @@ async fn main() {
         String::new()
     };
 
-    let (context, message) = match (arg_msg.is_empty(), stdin_data.is_empty()) {
-        (false, false) => (stdin_data, arg_msg),
-        (false, true) => (String::new(), arg_msg),
-        (true, false) => (String::new(), stdin_data),
+    let message = match (arg_msg.is_empty(), stdin_data.is_empty()) {
+        (false, true) => arg_msg,
+        (true, false) => stdin_data,
+        (false, false) => {
+            eprintln!("Error: provide a message via args OR stdin, not both");
+            std::process::exit(1);
+        }
         (true, true) => {
             eprintln!("Error: no message provided");
             eprintln!("Usage: shot \"message\"");
-            eprintln!("       echo \"context\" | shot \"instruction\"");
+            eprintln!("       echo \"message\" | shot");
             std::process::exit(1);
         }
     };
 
     let opts = RunOptions {
         session_path: session_path.as_deref(),
-        context: &context,
         message: &message,
         enabled_tools,
         tool_overrides,
-        prompt_override,
+        soul_override,
+        prompt_addition,
     };
 
     match shotclaw::run(&config, opts).await {
-        Ok(result) => print_result(&result, cli.quiet, cli.verbose),
+        Ok(result) => print_result(&result, cli.quiet, cli.json),
         Err(e) => {
             eprintln!("Error: {e}");
             std::process::exit(1);
