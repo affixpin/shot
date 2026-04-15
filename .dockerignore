@@ -1,0 +1,10 @@
+target/
+.git/
+.gitignore
+.DS_Store
+agent.toml
+*.log
+*.db
+README.md
+shooter.jpeg
+.dockerignore
