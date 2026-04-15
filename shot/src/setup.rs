@@ -10,6 +10,7 @@ const DEFAULT_SOUL: &str = include_str!("../defaults/SOUL.md");
 const DEFAULT_TOOLS: &[(&str, &str)] = &[
     ("file_read.toml", include_str!("../defaults/tools/file_read.toml")),
     ("file_write.toml", include_str!("../defaults/tools/file_write.toml")),
+    ("file_remove.toml", include_str!("../defaults/tools/file_remove.toml")),
     ("list_files.toml", include_str!("../defaults/tools/list_files.toml")),
     ("search_text.toml", include_str!("../defaults/tools/search_text.toml")),
     ("shell.toml", include_str!("../defaults/tools/shell.toml")),
@@ -25,6 +26,11 @@ struct ProviderTemplate {
     model: &'static str,
 }
 
+/// (name, short description) — canonical list surfaced in CLI help and errors.
+pub const SUPPORTED_PROVIDERS: &[(&str, &str)] = &[
+    ("gemini", "Google Gemini (gemini-3-flash-preview)"),
+];
+
 fn provider_template(name: &str) -> Option<ProviderTemplate> {
     match name {
         "gemini" => Some(ProviderTemplate {
@@ -38,7 +44,10 @@ fn provider_template(name: &str) -> Option<ProviderTemplate> {
 pub fn configure(provider: &str, api_key: &str) {
     let Some(template) = provider_template(provider) else {
         eprintln!("Unknown provider: {provider}");
-        eprintln!("Supported: gemini");
+        eprintln!("Supported providers:");
+        for (name, desc) in SUPPORTED_PROVIDERS {
+            eprintln!("  {name:10} {desc}");
+        }
         std::process::exit(1);
     };
 

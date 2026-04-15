@@ -14,7 +14,7 @@ struct Cli {
     name: Option<String>,
 
     /// Override interval in seconds
-    #[arg(short, long)]
+    #[arg(long)]
     interval: Option<u64>,
 
     /// Run once and exit (don't loop)

@@ -156,11 +156,83 @@ impl ToolSpec {
 fn format_output(output: &std::process::Output) -> String {
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     if output.status.success() {
-        if stdout.is_empty() { "(no output)".into() } else { stdout }
+        if stdout.is_empty() { "(no output)".into() } else { truncate_with_offload(&stdout) }
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
         let msg = if stderr.is_empty() { &stdout } else { &stderr };
-        format!("Error (exit {}): {}", output.status.code().unwrap_or(-1), msg)
+        format!("Error (exit {}): {}", output.status.code().unwrap_or(-1), truncate_with_offload(msg))
+    }
+}
+
+/// If the tool output is too large, save the full version to a file in the
+/// system temp dir and return a head+tail preview with a pointer to the full file.
+fn truncate_with_offload(text: &str) -> String {
+    const MAX_LINES: usize = 100;
+    const MAX_BYTES: usize = 10 * 1024;
+
+    let bytes = text.len();
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.len() <= MAX_LINES && bytes <= MAX_BYTES {
+        return text.to_string();
+    }
+
+    // Persist full output to disk
+    let results_dir = std::env::temp_dir().join("shot_tool_results");
+    let _ = std::fs::create_dir_all(&results_dir);
+    cleanup_old_results(&results_dir);
+
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let pid = std::process::id();
+    let file_path = results_dir.join(format!("{nanos}_{pid}.txt"));
+    let _ = std::fs::write(&file_path, text);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&file_path, std::fs::Permissions::from_mode(0o600));
+    }
+    let path_str = file_path.display().to_string();
+
+    // Build preview: head + tail if line-bound, head only if byte-bound
+    let head_n = MAX_LINES / 2;
+    let tail_n = MAX_LINES - head_n;
+
+    if lines.len() > MAX_LINES {
+        let head: String = lines[..head_n].join("\n");
+        let tail: String = lines[lines.len() - tail_n..].join("\n");
+        let skipped = lines.len() - MAX_LINES;
+        format!(
+            "{head}\n\n... ({skipped} lines truncated, full output: {path_str}) ...\n\n{tail}"
+        )
+    } else {
+        // Line count fits but bytes too big — truncate at byte boundary
+        let mut end = MAX_BYTES;
+        while end > 0 && !text.is_char_boundary(end) { end -= 1; }
+        format!(
+            "{}\n\n... ({} bytes truncated, full output: {}) ...",
+            &text[..end],
+            bytes - end,
+            path_str,
+        )
+    }
+}
+
+/// Delete tool result files older than 24 hours.
+fn cleanup_old_results(dir: &std::path::Path) {
+    let cutoff = std::time::SystemTime::now()
+        .checked_sub(std::time::Duration::from_secs(24 * 60 * 60));
+    let Some(cutoff) = cutoff else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for e in entries.flatten() {
+        if let Ok(meta) = e.metadata() {
+            if let Ok(modified) = meta.modified() {
+                if modified < cutoff {
+                    let _ = std::fs::remove_file(e.path());
+                }
+            }
+        }
     }
 }
 

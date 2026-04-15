@@ -1,6 +1,6 @@
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 // ── Deserialization types ──────────────────────────────────────────────
 
@@ -59,7 +59,7 @@ fn data_dir() -> PathBuf {
     home_dir().join(".local/share/shot")
 }
 
-fn resolve(base: &PathBuf, path: &str) -> String {
+fn resolve(base: &Path, path: &str) -> String {
     if path.is_empty() { return String::new(); }
     let p = PathBuf::from(path);
     if p.is_absolute() { path.to_string() } else { base.join(path).to_string_lossy().to_string() }

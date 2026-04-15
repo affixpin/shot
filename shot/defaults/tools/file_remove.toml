@@ -1,0 +1,9 @@
+healthcheck = "which rm"
+name = "file_remove"
+description = "Remove a file or directory"
+command = 'rm -rf "$path" && echo "Removed $path"'
+
+[vars.path]
+type = "string"
+description = "File path or directory to remove"
+required = true

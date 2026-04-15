@@ -1,7 +1,7 @@
-healthcheck = "test -n \"$bot_token\""
+healthcheck = "which curl && test -n \"$bot_token\""
 name = "tg_send"
 description = "Send a message to a Telegram chat"
-command = 'curl -s "https://api.telegram.org/bot$bot_token/sendMessage" -d "chat_id=$chat_id" --data-urlencode "text=$message" | jq -r "if .ok then \"Sent to \" + (.result.chat.id | tostring) else \"Error: \" + .description end"'
+command = '''r=$(curl -s "https://api.telegram.org/bot$bot_token/sendMessage" -d "chat_id=$chat_id" --data-urlencode "text=$message") && (printf %s "$r" | grep -q '"ok":true' && echo "Sent to $chat_id" || echo "Error: $r")'''
 
 [vars.bot_token]
 description = "Telegram bot token"

@@ -47,6 +47,8 @@ pub struct RunOptions<'a> {
     pub enabled_tools: Option<Vec<String>>,
     /// Per-tool var overrides from CLI flags.
     pub tool_overrides: HashMap<String, HashMap<String, String>>,
+    /// Tools the agent MUST call. Marked as REQUIRED in the system prompt.
+    pub required_tools: Vec<String>,
     /// Replace the soul (base personality). If None, use SOUL.md from config.
     pub soul_override: Option<String>,
     /// Append additional instructions to the soul.
@@ -89,7 +91,17 @@ pub async fn run(
         if !system.is_empty() { system.push_str("\n\n"); }
         system.push_str("## Available tools\n\n");
         for (name, desc) in &tool_descs {
-            system.push_str(&format!("- `{name}`: {desc}\n"));
+            if opts.required_tools.contains(name) {
+                system.push_str(&format!("- `{name}` **(REQUIRED — you MUST call this)**: {desc}\n"));
+            } else {
+                system.push_str(&format!("- `{name}`: {desc}\n"));
+            }
+        }
+        if !opts.required_tools.is_empty() {
+            system.push_str(&format!(
+                "\n**IMPORTANT:** You must call the following tool(s) as part of completing this task: {}. They are the primary mechanism by which your response is delivered — answering without calling them produces an incomplete result.\n",
+                opts.required_tools.iter().map(|t| format!("`{t}`")).collect::<Vec<_>>().join(", ")
+            ));
         }
     }
 
@@ -100,6 +112,8 @@ pub async fn run(
         max_turns: config.max_turns,
         reasoning_effort: config.reasoning.clone(),
     };
+
+    emit::emit("user.message", serde_json::json!({"content": opts.message}));
 
     let mut messages = vec![Message::system(&system)];
     let session_len = session_history.len();

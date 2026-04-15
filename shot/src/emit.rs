@@ -8,15 +8,11 @@ const MODE_JSON: u8 = 1;
 const MODE_QUIET: u8 = 2;
 
 static MODE: AtomicU8 = AtomicU8::new(MODE_PRETTY);
-static FULL_OUTPUT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static TOTAL_PROMPT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static TOTAL_TOKENS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 pub fn set_json() { MODE.store(MODE_JSON, Ordering::Relaxed); }
 pub fn set_quiet() { MODE.store(MODE_QUIET, Ordering::Relaxed); }
-pub fn set_full() { FULL_OUTPUT.store(true, Ordering::Relaxed); }
-
-fn is_full() -> bool { FULL_OUTPUT.load(Ordering::Relaxed) }
 
 fn mode() -> u8 { MODE.load(Ordering::Relaxed) }
 
@@ -86,6 +82,10 @@ fn pretty_print(event: &serde_json::Value) {
                 let _ = writeln!(out, "{content}");
             }
         }
+        "user.message" => {
+            let content = data["content"].as_str().unwrap_or("");
+            let _ = writeln!(out, "{BOLD}> {content}{RESET}");
+        }
         "tool.call" => {
             let name = data["name"].as_str().unwrap_or("?");
             let detail = data["args"].as_object()
@@ -103,16 +103,8 @@ fn pretty_print(event: &serde_json::Value) {
         }
         "tool.result" => {
             let result = data["result"].as_str().unwrap_or("");
-            let lines: Vec<&str> = result.lines().collect();
-            if is_full() || lines.len() <= 5 {
-                for line in &lines {
-                    let _ = writeln!(out, "{DIM}{line}{RESET}");
-                }
-            } else {
-                for line in lines.iter().take(3) {
-                    let _ = writeln!(out, "{DIM}{line}{RESET}");
-                }
-                let _ = writeln!(out, "{DIM}... ({} more lines){RESET}", lines.len() - 3);
+            for line in result.lines() {
+                let _ = writeln!(out, "{DIM}{line}{RESET}");
             }
         }
         "turn.complete" => {

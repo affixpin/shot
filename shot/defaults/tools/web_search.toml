@@ -1,7 +1,11 @@
-healthcheck = "test -n \"$jina_api_key\""
+healthcheck = "which curl && test -n \"$jina_api_key\""
 name = "web_search"
 description = "Search the web and return results as markdown"
-command = 'curl -sS "https://s.jina.ai/$(printf "%s" "$query" | jq -sRr @uri)" -H "Accept: text/markdown" -H "Authorization: Bearer $jina_api_key" -H "X-No-Cache: true"'
+command = '''curl -sS -G "https://s.jina.ai/" \
+    --data-urlencode "q=$query" \
+    -H "Accept: text/markdown" \
+    -H "Authorization: Bearer $jina_api_key" \
+    -H "X-No-Cache: true"'''
 
 [vars.jina_api_key]
 description = "Jina API key (https://jina.ai/reader)"

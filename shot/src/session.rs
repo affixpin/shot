@@ -1,10 +1,17 @@
 use crate::react::Message;
 use rusqlite::Connection;
+use std::path::Path;
 use std::sync::Mutex;
 
 pub struct Session {
     db: Mutex<Connection>,
     max_chars: usize,
+}
+
+pub struct SessionInfo {
+    pub name: String,
+    pub size_bytes: u64,
+    pub message_count: usize,
 }
 
 impl Session {
@@ -50,7 +57,38 @@ impl Session {
             }
         }
         result.reverse();
+
+        // Truncate from the front until we hit a user message boundary.
+        // This prevents replaying history that starts with an orphaned
+        // assistant(tool_calls) or tool_result, which providers like Gemini reject.
+        while let Some(first) = result.first() {
+            if first.role == "user" { break; }
+            result.remove(0);
+        }
+
         result
+    }
+
+    /// Enumerate sessions in `dir`. Returns sessions sorted by size descending.
+    /// Empty vec if the directory is missing, unreadable, or contains no sessions.
+    pub fn list(dir: &Path) -> Vec<SessionInfo> {
+        let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new(); };
+
+        let mut sessions = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("db") { continue; }
+            let Some(name) = path.file_stem().and_then(|s| s.to_str()).map(String::from) else { continue; };
+            let size_bytes = entry.metadata().map(|m| m.len()).unwrap_or(0);
+            let message_count = Connection::open(&path)
+                .ok()
+                .and_then(|db| db.query_row("SELECT COUNT(*) FROM messages", [], |row| row.get::<_, i64>(0)).ok())
+                .unwrap_or(0) as usize;
+            sessions.push(SessionInfo { name, size_bytes, message_count });
+        }
+
+        sessions.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes));
+        sessions
     }
 
     pub fn push(&self, msg: &Message) {
