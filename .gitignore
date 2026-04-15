@@ -2,4 +2,4 @@ target/
 *.log
 *.db
 .DS_Store
-agent.toml
+/agent.toml

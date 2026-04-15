@@ -1,0 +1,11 @@
+[{{provider}}]
+llm_url = "{{llm_url}}"
+api_key = "{{api_key}}"
+model = "{{model}}"
+reasoning = "high"
+
+[agent]
+provider = "{{provider}}"
+soul_file = "{{data_dir}}/SOUL.md"
+tools_dir = "{{data_dir}}/tools"
+max_turns = 50
