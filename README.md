@@ -19,4 +19,20 @@ Shot exists to be different:
 - **Unix-first** — stdin in, stdout out. Pipe it, redirect it, loop it, compose it. `shot` is a filter, not a framework. It works with `grep`, `jq`, `curl`, `tee`, `>>` and everything else in your terminal.
 - **Portable** — one static binary, one config file, a directory of TOML tools. Copy it anywhere and it works.
 
-I love workflows built from minimal, composable tools — `vim`, `fzf`, `ripgrep`, `jq` — tools that do one thing well and combine through pipes. Shot is built with the same mindset.
+## quick start
+
+### docker
+
+The easiest way to run shot is via the official docker image:
+
+```bash
+docker run -it -e GEMINI_API_KEY=your_key affixpin/shot "whats in the current directory?"
+```
+
+### build from source
+
+```bash
+cargo build --release
+cp target/release/shot /usr/local/bin/
+shot configure gemini YOUR_API_KEY
+```
