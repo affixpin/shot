@@ -223,10 +223,28 @@ fn extract_tool_flags(args: &mut Vec<String>) -> ToolFlags {
     ToolFlags { enabled, vars, metas }
 }
 
+/// Pre-parse `--config.X.Y.Z=value` flags. Removes them from `args`.
+/// Returns a list of (dotted-path, value) pairs to overlay onto the config tree.
+fn extract_config_flags(args: &mut Vec<String>) -> Vec<(Vec<String>, String)> {
+    let mut overrides = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i].clone();
+        let Some(rest) = arg.strip_prefix("--config.") else { i += 1; continue; };
+        let Some(eq) = rest.find('=') else { i += 1; continue; };
+        let path: Vec<String> = rest[..eq].split('.').map(String::from).collect();
+        let value = rest[eq + 1..].to_string();
+        overrides.push((path, value));
+        args.remove(i);
+    }
+    overrides
+}
+
 #[tokio::main]
 async fn main() {
-    // Pre-parse --tools.X flags before clap sees them
+    // Pre-parse --tools.X and --config.X flags before clap sees them
     let mut raw_args: Vec<String> = std::env::args().collect();
+    let config_overrides = extract_config_flags(&mut raw_args);
     let ToolFlags { enabled: mut enabled_tools_list, vars: tool_overrides, metas: tool_metas } =
         extract_tool_flags(&mut raw_args);
 
@@ -269,7 +287,7 @@ async fn main() {
             return;
         }
         Some(Command::Tools) => {
-            let config = shotclaw::Config::load();
+            let config = shotclaw::Config::load(&config_overrides);
             shotclaw::tools::toolscheck_all(&config.tools_dir, &tool_overrides);
             return;
         }
@@ -322,7 +340,7 @@ async fn main() {
     let prompt_addition = cli.prompt
         .or_else(|| cli.prompt_file.as_deref().map(read_or_die));
 
-    let config = shotclaw::Config::load();
+    let config = shotclaw::Config::load(&config_overrides);
 
     // Pipe mode: each stdin line is a message. Args not allowed.
     if cli.pipe {
