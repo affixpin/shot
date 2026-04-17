@@ -53,56 +53,22 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Set up shot with a provider
-    #[command(
-        long_about = "\
-Set up shot with a provider.
-
-Writes agent.toml to ~/.config/shot/, and installs SOUL.md plus default
-tool definitions into ~/.local/share/shot/. Safe to re-run: the config
-is overwritten, but existing SOUL.md and tool files are preserved so
-your customizations survive.
-
-Supported providers:
-  gemini   Google Gemini (gemini-3-flash-preview)
-
-Examples:
-  shot configure gemini --api-key AIza...
-
-After configuring, try:
-  shot \"hello\"          # one-shot prompt
-  shot tools             # list available tools and their healthcheck
-  shot sessions list     # inspect stored sessions",
-        after_help = "\
-Get an API key:
-  gemini  https://aistudio.google.com/apikey
-
-Files written:
-  ~/.config/shot/agent.toml          main config (provider, model, key)
-  ~/.local/share/shot/SOUL.md        base personality (edit freely)
-  ~/.local/share/shot/tools/*.toml   tool definitions (edit freely)
-
-Notes:
-  - Your API key is stored in plaintext in agent.toml. Keep that file
-    readable only by your user (chmod 600 recommended).
-  - Re-running `shot configure` overwrites agent.toml but will not
-    touch your SOUL.md or tool definitions.
-  - To switch providers later, just run `shot configure` again with a
-    different provider name and key."
-    )]
-    Configure {
-        /// Provider name (currently supported: gemini)
-        provider: String,
-        /// API key for the provider — stored in ~/.config/shot/agent.toml
-        #[arg(long)]
-        api_key: String,
-    },
     /// List tools with their healthcheck status
     Tools,
     /// Manage sessions (list / reset)
     Sessions {
         #[command(subcommand)]
         action: Option<SessionAction>,
+    },
+    /// Inspect the effective config
+    ///
+    /// Prints the fully-merged config (defaults + file + env + CLI overrides)
+    /// to stdout. Redirect with `>` to write a persistent config file:
+    ///
+    ///   shot --config.gemini.api_key=AIza... config show > ~/.config/shot/agent.toml
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
     },
 }
 
@@ -112,6 +78,12 @@ enum SessionAction {
     List,
     /// Delete a session
     Reset { session: String },
+}
+
+#[derive(Subcommand)]
+enum ConfigAction {
+    /// Print the fully-merged effective config as TOML
+    Show,
 }
 
 fn sessions_dir() -> PathBuf {
@@ -250,14 +222,6 @@ async fn main() {
 
     let cli = Cli::try_parse_from(&raw_args).unwrap_or_else(|e| {
         e.print().ok();
-        if raw_args.iter().any(|a| a == "configure") {
-            eprintln!("\nSupported providers:");
-            for (name, desc) in shotclaw::setup::SUPPORTED_PROVIDERS {
-                eprintln!("  {name:10} {desc}");
-            }
-            eprintln!("\nExample:");
-            eprintln!("  shot configure gemini --api-key AIza...");
-        }
         std::process::exit(e.exit_code());
     });
 
@@ -282,10 +246,6 @@ async fn main() {
     };
 
     match cli.command {
-        Some(Command::Configure { provider, api_key }) => {
-            shotclaw::setup::configure(&provider, &api_key);
-            return;
-        }
         Some(Command::Tools) => {
             let config = shotclaw::Config::load(&config_overrides);
             shotclaw::tools::toolscheck_all(&config.tools_dir, &tool_overrides);
@@ -304,6 +264,11 @@ async fn main() {
                     }
                 }
             }
+            return;
+        }
+        Some(Command::Config { action: ConfigAction::Show }) => {
+            let merged = shotclaw::config::merged_toml(&config_overrides);
+            print!("{}", toml::to_string_pretty(&merged).unwrap());
             return;
         }
         None => {}

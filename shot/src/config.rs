@@ -1,3 +1,4 @@
+use crate::setup;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -51,7 +52,7 @@ pub struct Config {
 // ── Fallback defaults ──────────────────────────────────────────────────
 //
 // Used when no config file exists and when the file is missing fields.
-// CLI `--config.X.Y=value` overrides layer on top of this.
+// Env vars layer on top, then CLI `--config.X.Y=value` flags (highest priority).
 const FALLBACK_CONFIG: &str = r#"
 [agent]
 provider = "gemini"
@@ -122,35 +123,84 @@ fn parse_scalar(s: &str) -> toml::Value {
     toml::Value::String(s.to_string())
 }
 
+// ── Public: merged config tree ─────────────────────────────────────────
+
+/// Build the fully-merged config tree without deserializing or validating.
+/// Layers, lowest to highest priority:
+///   1. FALLBACK_CONFIG (compiled-in defaults)
+///   2. ~/.config/shot/agent.toml, if present
+///   3. Env vars for known providers: `<NAME>_API_KEY`
+///   4. CLI `--config.X.Y=value` overrides
+///
+/// Used by `Config::load` and by the `shot config show` subcommand.
+pub fn merged_toml(overrides: &[(Vec<String>, String)]) -> toml::Value {
+    let mut merged: toml::Value = toml::from_str(FALLBACK_CONFIG)
+        .expect("FALLBACK_CONFIG is malformed — this is a bug");
+
+    // Layer 2: user's config file.
+    let path = config_path();
+    if path.exists() {
+        let raw = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| die("config", &format!("failed to read {}: {e}", path.display())));
+        let file: toml::Value = toml::from_str(&raw)
+            .unwrap_or_else(|e| die("config", &format!("failed to parse {}: {e}", path.display())));
+        deep_merge(&mut merged, file);
+    }
+
+    // Layer 3: env vars. `<PROVIDER>_API_KEY` maps to `[provider] api_key = ...`.
+    for (name, _desc) in setup::SUPPORTED_PROVIDERS {
+        let var = format!("{}_API_KEY", name.to_uppercase());
+        if let Ok(key) = std::env::var(&var) {
+            if !key.is_empty() {
+                set_path(
+                    &mut merged,
+                    &[name.to_string(), "api_key".to_string()],
+                    toml::Value::String(key),
+                );
+            }
+        }
+    }
+
+    // Layer 4: CLI overrides.
+    for (p, v) in overrides {
+        set_path(&mut merged, p, parse_scalar(v));
+    }
+
+    merged
+}
+
+// ── Auto-bootstrap ─────────────────────────────────────────────────────
+
+/// On first run, extract embedded defaults (tools + SOUL.md) to disk.
+/// Skipped entirely if the target directory already exists, so user
+/// customizations are never overwritten.
+fn bootstrap_defaults(tools_dir: &str, soul_file: &str) {
+    let tools_path = Path::new(tools_dir);
+    if !tools_path.exists() && std::fs::create_dir_all(tools_path).is_ok() {
+        for (name, content) in setup::DEFAULT_TOOLS {
+            let _ = std::fs::write(tools_path.join(name), content);
+        }
+    }
+
+    let soul_path = Path::new(soul_file);
+    if !soul_path.exists() {
+        if let Some(parent) = soul_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(soul_path, setup::DEFAULT_SOUL);
+    }
+}
+
 // ── Load ───────────────────────────────────────────────────────────────
 
 impl Config {
-    /// Build the final config by layering: fallback defaults → file → CLI overrides.
-    ///
-    /// `overrides` is a list of (dotted-path, value) pairs from `--config.X.Y=value`.
-    /// Validation runs at the end — if `llm_url`, `api_key`, or `model` are empty
-    /// for the selected provider, print an actionable error and exit.
+    /// Build the final config from layered sources, validate required
+    /// fields, auto-bootstrap tools/soul on first run, and return the
+    /// derived struct. Exits the process with an actionable error if
+    /// the selected provider is missing required fields.
     pub fn load(overrides: &[(Vec<String>, String)]) -> Self {
-        // 1. Start with fallback defaults.
-        let mut merged: toml::Value = toml::from_str(FALLBACK_CONFIG)
-            .expect("FALLBACK_CONFIG is malformed — this is a bug");
+        let merged = merged_toml(overrides);
 
-        // 2. Overlay user's config file, if present.
-        let path = config_path();
-        if path.exists() {
-            let raw = std::fs::read_to_string(&path)
-                .unwrap_or_else(|e| die("config", &format!("failed to read {}: {e}", path.display())));
-            let file: toml::Value = toml::from_str(&raw)
-                .unwrap_or_else(|e| die("config", &format!("failed to parse {}: {e}", path.display())));
-            deep_merge(&mut merged, file);
-        }
-
-        // 3. Overlay CLI overrides (highest priority).
-        for (p, v) in overrides {
-            set_path(&mut merged, p, parse_scalar(v));
-        }
-
-        // 4. Deserialize into structured form.
         let file: ConfigFile = merged.try_into()
             .unwrap_or_else(|e| die("config", &format!("{e}")));
 
@@ -160,7 +210,7 @@ impl Config {
             .and_then(|v| v.try_into().ok())
             .unwrap_or_default();
 
-        // 5. Validate required provider fields.
+        // Validate required provider fields.
         let mut missing = Vec::new();
         if provider.llm_url.is_empty() { missing.push(format!("{provider_name}.llm_url")); }
         if provider.api_key.is_empty() { missing.push(format!("{provider_name}.api_key")); }
@@ -169,7 +219,7 @@ impl Config {
             die_missing(&provider_name, &missing);
         }
 
-        // 6. Resolve paths & read soul.
+        // Resolve paths.
         let data_dir = data_dir();
         let soul_file = if file.agent.soul_file.is_empty() {
             data_dir.join("SOUL.md").to_string_lossy().to_string()
@@ -181,6 +231,9 @@ impl Config {
         } else {
             resolve(&data_dir, &file.agent.tools_dir)
         };
+
+        // First-run bootstrap: extract embedded defaults to disk.
+        bootstrap_defaults(&tools_dir, &soul_file);
 
         Self {
             llm_url: provider.llm_url,
@@ -202,14 +255,16 @@ fn die(title: &str, msg: &str) -> ! {
 }
 
 fn die_missing(provider: &str, missing: &[String]) -> ! {
+    let env_var = format!("{}_API_KEY", provider.to_uppercase());
     eprintln!("Config incomplete. Missing or empty:");
     for m in missing {
         eprintln!("  - {m}");
     }
     eprintln!();
-    eprintln!("Fix by one of:");
+    eprintln!("Fix by any of:");
+    eprintln!("  export {env_var}=<key>");
     eprintln!("  shot --config.{provider}.api_key=<key> \"...\"");
-    eprintln!("  shot configure {provider} --api-key <key>");
+    eprintln!("  shot --config.{provider}.api_key=<key> config show > ~/.config/shot/agent.toml");
     if provider == "gemini" {
         eprintln!();
         eprintln!("Get a key: https://aistudio.google.com/apikey");
