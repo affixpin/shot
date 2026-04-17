@@ -189,7 +189,46 @@ pub fn merged_toml(config_file: Option<&str>, overrides: &[(Vec<String>, String)
         set_path(&mut merged, p, parse_scalar(v));
     }
 
+    // Provider auto-detection: if the selected provider has no api_key but
+    // exactly one other provider does, switch `agent.provider` to that one.
+    // Lets users set SHOT_CONFIG_ANTHROPIC_API_KEY alone without also
+    // needing SHOT_CONFIG_AGENT_PROVIDER=anthropic. No-op in the ambiguous
+    // case (0 or 2+ configured providers); validation surfaces those.
+    apply_auto_detect(&mut merged);
+
     merged
+}
+
+fn apply_auto_detect(merged: &mut toml::Value) {
+    let current = merged
+        .get("agent")
+        .and_then(|v| v.get("provider"))
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let Some(current) = current else { return };
+
+    let has_key = |root: &toml::Value, name: &str| -> bool {
+        root.get(name)
+            .and_then(|v| v.get("api_key"))
+            .and_then(|v| v.as_str())
+            .map(|s| !s.is_empty())
+            .unwrap_or(false)
+    };
+
+    if has_key(merged, &current) { return; }
+
+    let Some(table) = merged.as_table() else { return };
+    let candidates: Vec<String> = table.keys()
+        .filter(|k| k.as_str() != "agent" && k.as_str() != current)
+        .filter(|k| has_key(merged, k))
+        .cloned()
+        .collect();
+
+    if candidates.len() == 1 {
+        if let Some(agent) = merged.get_mut("agent").and_then(|v| v.as_table_mut()) {
+            agent.insert("provider".into(), toml::Value::String(candidates[0].clone()));
+        }
+    }
 }
 
 // ── Auto-bootstrap ─────────────────────────────────────────────────────
@@ -227,19 +266,34 @@ impl Config {
         let file: ConfigFile = merged.try_into()
             .unwrap_or_else(|e| die("config", &format!("{e}")));
 
-        let provider_name = file.agent.provider.clone();
-        let provider: ProviderConfig = file.providers.get(&provider_name)
-            .cloned()
-            .and_then(|v| v.try_into().ok())
-            .unwrap_or_default();
+        let lookup = |name: &str| -> ProviderConfig {
+            file.providers.get(name)
+                .cloned()
+                .and_then(|v| v.try_into().ok())
+                .unwrap_or_default()
+        };
 
-        // Validate required provider fields.
+        let provider_name = file.agent.provider.clone();
+        let provider = lookup(&provider_name);
+
+        // Validate required fields. Auto-detect already ran in merged_toml
+        // and switched `agent.provider` when unambiguous, so if we're here
+        // with an empty api_key it's one of: no provider has any key, OR
+        // multiple providers have keys (ambiguous).
         let mut missing = Vec::new();
         if provider.llm_url.is_empty() { missing.push(format!("{provider_name}.llm_url")); }
         if provider.api_key.is_empty() { missing.push(format!("{provider_name}.api_key")); }
         if provider.model.is_empty()   { missing.push(format!("{provider_name}.model")); }
         if !missing.is_empty() {
-            die_missing(&provider_name, &missing);
+            let configured: Vec<String> = file.providers.keys()
+                .filter(|n| !lookup(n).api_key.is_empty())
+                .cloned()
+                .collect();
+            match configured.len() {
+                0 => die_no_provider_configured(),
+                n if n >= 2 => die_ambiguous_provider(&configured),
+                _ => die_missing(&provider_name, &missing),
+            }
         }
 
         // Resolve paths.
@@ -279,7 +333,7 @@ fn die(title: &str, msg: &str) -> ! {
 
 fn die_missing(provider: &str, missing: &[String]) -> ! {
     let section_upper = provider.to_uppercase();
-    eprintln!("Config incomplete. Missing or empty:");
+    eprintln!("Config incomplete for provider '{provider}'. Missing or empty:");
     for m in missing {
         eprintln!("  - {m}");
     }
@@ -295,11 +349,39 @@ fn die_missing(provider: &str, missing: &[String]) -> ! {
     std::process::exit(1);
 }
 
-fn key_url(provider: &str) -> Option<&'static str> {
-    match provider {
-        "gemini"    => Some("https://aistudio.google.com/apikey"),
-        "openai"    => Some("https://platform.openai.com/api-keys"),
-        "anthropic" => Some("https://console.anthropic.com/settings/keys"),
-        _ => None,
+fn die_ambiguous_provider(configured: &[String]) -> ! {
+    eprintln!("Multiple providers have keys set: {}.", configured.join(", "));
+    eprintln!();
+    eprintln!("Pick one explicitly:");
+    for name in configured {
+        eprintln!("  export SHOT_CONFIG_AGENT_PROVIDER={name}");
     }
+    std::process::exit(1);
+}
+
+fn die_no_provider_configured() -> ! {
+    eprintln!("No provider configured. Set an API key for one of:");
+    eprintln!();
+    for (name, url) in KNOWN_PROVIDERS {
+        let section_upper = name.to_uppercase();
+        eprintln!("  export SHOT_CONFIG_{section_upper}_API_KEY=<key>");
+        eprintln!("      {url}");
+    }
+    eprintln!();
+    eprintln!("Shot picks the provider automatically from whichever key is set.");
+    eprintln!("To force a specific provider, also set:");
+    eprintln!("  export SHOT_CONFIG_AGENT_PROVIDER=<name>");
+    std::process::exit(1);
+}
+
+const KNOWN_PROVIDERS: &[(&str, &str)] = &[
+    ("gemini",    "https://aistudio.google.com/apikey"),
+    ("openai",    "https://platform.openai.com/api-keys"),
+    ("anthropic", "https://console.anthropic.com/settings/keys"),
+];
+
+fn key_url(provider: &str) -> Option<&'static str> {
+    KNOWN_PROVIDERS.iter()
+        .find(|(n, _)| *n == provider)
+        .map(|(_, u)| *u)
 }
