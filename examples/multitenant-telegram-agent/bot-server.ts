@@ -57,8 +57,11 @@ createServer(async (req, res) => {
     if (!res.headersSent) res.writeHead(502);
     res.end();
   }
-}).listen(PROXY_PORT, "127.0.0.1", () => {
-  console.log(`proxy: http://127.0.0.1:${PROXY_PORT} -> ${GEMINI_BASE}`);
+}).listen(PROXY_PORT, "0.0.0.0", () => {
+  // Bind on all interfaces so containers reach it via host.docker.internal
+  // (which resolves to the Docker bridge gateway, not loopback). GCP's
+  // default-deny ingress firewall keeps this port private in practice.
+  console.log(`proxy: 0.0.0.0:${PROXY_PORT} -> ${GEMINI_BASE}`);
 });
 
 const tg = (method: string, body: object) =>
