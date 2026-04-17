@@ -66,12 +66,12 @@ api_key = ""
 
 [openai]
 llm_url = "https://api.openai.com/v1"
-model = "gpt-4o-mini"
+model = "gpt-4o"
 api_key = ""
 
 [anthropic]
 llm_url = "https://api.anthropic.com/v1"
-model = "claude-sonnet-4-6"
+model = "claude-opus-4-7"
 api_key = ""
 "#;
 
