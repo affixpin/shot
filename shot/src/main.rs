@@ -49,6 +49,9 @@ struct Cli {
     #[arg(long = "tools")]
     all_tools: bool,
 
+    /// Use a specific config file (default: $XDG_CONFIG_HOME/shot/agent.toml or ~/.config/shot/agent.toml)
+    #[arg(long)]
+    config_file: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -247,7 +250,7 @@ async fn main() {
 
     match cli.command {
         Some(Command::Tools) => {
-            let config = shotclaw::Config::load(&config_overrides);
+            let config = shotclaw::Config::load(cli.config_file.as_deref(), &config_overrides);
             shotclaw::tools::toolscheck_all(&config.tools_dir, &tool_overrides);
             return;
         }
@@ -267,7 +270,7 @@ async fn main() {
             return;
         }
         Some(Command::Config { action: ConfigAction::Show }) => {
-            let merged = shotclaw::config::merged_toml(&config_overrides);
+            let merged = shotclaw::config::merged_toml(cli.config_file.as_deref(), &config_overrides);
             print!("{}", toml::to_string_pretty(&merged).unwrap());
             return;
         }
@@ -305,7 +308,7 @@ async fn main() {
     let prompt_addition = cli.prompt
         .or_else(|| cli.prompt_file.as_deref().map(read_or_die));
 
-    let config = shotclaw::Config::load(&config_overrides);
+    let config = shotclaw::Config::load(cli.config_file.as_deref(), &config_overrides);
 
     // Pipe mode: each stdin line is a message. Args not allowed.
     if cli.pipe {

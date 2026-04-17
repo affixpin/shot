@@ -71,7 +71,12 @@ fn home_dir() -> PathBuf {
     std::env::var("HOME").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("."))
 }
 
-fn config_path() -> PathBuf {
+fn default_config_path() -> PathBuf {
+    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+        if !xdg.is_empty() {
+            return PathBuf::from(xdg).join("shot/agent.toml");
+        }
+    }
     home_dir().join(".config/shot/agent.toml")
 }
 
@@ -128,23 +133,31 @@ fn parse_scalar(s: &str) -> toml::Value {
 /// Build the fully-merged config tree without deserializing or validating.
 /// Layers, lowest to highest priority:
 ///   1. FALLBACK_CONFIG (compiled-in defaults)
-///   2. ~/.config/shot/agent.toml, if present
-///   3. Env vars for known providers: `<NAME>_API_KEY`
+///   2. Config file (`--config-file` if given, else XDG/default path — if it exists)
+///   3. SHOT_CONFIG_<SECTION>_<FIELD> env vars
 ///   4. CLI `--config.X.Y=value` overrides
 ///
+/// If `config_file` is explicitly provided but doesn't exist, exits with an
+/// error. If the default path doesn't exist, silently skips that layer.
+///
 /// Used by `Config::load` and by the `shot config show` subcommand.
-pub fn merged_toml(overrides: &[(Vec<String>, String)]) -> toml::Value {
+pub fn merged_toml(config_file: Option<&str>, overrides: &[(Vec<String>, String)]) -> toml::Value {
     let mut merged: toml::Value = toml::from_str(FALLBACK_CONFIG)
         .expect("FALLBACK_CONFIG is malformed — this is a bug");
 
-    // Layer 2: user's config file.
-    let path = config_path();
+    // Layer 2: config file.
+    let (path, required) = match config_file {
+        Some(p) => (PathBuf::from(p), true),
+        None => (default_config_path(), false),
+    };
     if path.exists() {
         let raw = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| die("config", &format!("failed to read {}: {e}", path.display())));
         let file: toml::Value = toml::from_str(&raw)
             .unwrap_or_else(|e| die("config", &format!("failed to parse {}: {e}", path.display())));
         deep_merge(&mut merged, file);
+    } else if required {
+        die("config", &format!("--config-file {} does not exist", path.display()));
     }
 
     // Layer 3: `SHOT_CONFIG_<SECTION>_<FIELD>=value` env vars, mirroring
@@ -198,8 +211,8 @@ impl Config {
     /// fields, auto-bootstrap tools/soul on first run, and return the
     /// derived struct. Exits the process with an actionable error if
     /// the selected provider is missing required fields.
-    pub fn load(overrides: &[(Vec<String>, String)]) -> Self {
-        let merged = merged_toml(overrides);
+    pub fn load(config_file: Option<&str>, overrides: &[(Vec<String>, String)]) -> Self {
+        let merged = merged_toml(config_file, overrides);
 
         let file: ConfigFile = merged.try_into()
             .unwrap_or_else(|e| die("config", &format!("{e}")));
