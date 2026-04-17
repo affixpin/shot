@@ -1,0 +1,8 @@
+{
+  "name": "shot-multitenant-telegram-agent",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=18" },
+  "scripts": { "start": "tsx bot-server.ts" },
+  "devDependencies": { "tsx": "^4" }
+}
