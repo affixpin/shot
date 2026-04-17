@@ -1,0 +1,19 @@
+[Unit]
+Description=shot telegram bot
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/shot/examples/multitenant-telegram-agent
+EnvironmentFile=/etc/shot-bot.env
+ExecStart=/usr/bin/npm start
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

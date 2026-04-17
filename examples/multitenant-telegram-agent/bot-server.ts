@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { createServer } from "node:http";
 
 const exec = promisify(execFile);
 
@@ -15,6 +16,8 @@ const DATA = join(process.cwd(), "user_data");
 const IMAGE = process.env.SHOT_IMAGE ?? "affixpin/shot:latest";
 const MEMORY = process.env.SHOT_MEMORY ?? "128m";
 const CPUS = process.env.SHOT_CPUS ?? "0.5";
+const PROXY_PORT = Number(process.env.PROXY_PORT ?? 3000);
+const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/openai";
 
 mkdirSync(DATA, { recursive: true });
 
@@ -22,6 +25,41 @@ type Update = {
   update_id: number;
   message?: { text?: string; chat: { id: number } };
 };
+
+// Proxy LLM endpoint. Shot containers talk to this instead of Gemini
+// directly, so the real API key never enters a shot container and can't
+// be exfiltrated via tool calls.
+createServer(async (req, res) => {
+  try {
+    if (req.method !== "POST" || !req.url) {
+      res.writeHead(404).end();
+      return;
+    }
+    const body: Buffer[] = [];
+    for await (const chunk of req) body.push(chunk);
+    const upstream = await fetch(`${GEMINI_BASE}${req.url}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${GEMINI_API_KEY}`,
+      },
+      body: Buffer.concat(body),
+    });
+    res.writeHead(upstream.status, {
+      "content-type": upstream.headers.get("content-type") ?? "application/json",
+    });
+    if (upstream.body) {
+      for await (const chunk of upstream.body) res.write(chunk);
+    }
+    res.end();
+  } catch (e: any) {
+    console.error("proxy:", e.message);
+    if (!res.headersSent) res.writeHead(502);
+    res.end();
+  }
+}).listen(PROXY_PORT, "127.0.0.1", () => {
+  console.log(`proxy: http://127.0.0.1:${PROXY_PORT} -> ${GEMINI_BASE}`);
+});
 
 const tg = (method: string, body: object) =>
   fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/${method}`, {
@@ -39,7 +77,9 @@ async function handle({ message }: Update) {
   try {
     const { stdout } = await exec("docker", [
       "run", "--rm",
-      "-e", `SHOT_CONFIG_GEMINI_API_KEY=${GEMINI_API_KEY}`,
+      "--add-host=host.docker.internal:host-gateway",
+      "-e", `SHOT_CONFIG_GEMINI_LLM_URL=http://host.docker.internal:${PROXY_PORT}`,
+      "-e", "SHOT_CONFIG_GEMINI_API_KEY=via-proxy",
       "-v", `${userDir}:/home/agent/.local/share/shot`,
       "--memory", MEMORY, "--cpus", CPUS,
       IMAGE, "--quiet", "--tools", `--session=${chat_id}`, message.text,
