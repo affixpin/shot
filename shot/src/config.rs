@@ -147,7 +147,8 @@ pub fn merged_toml(overrides: &[(Vec<String>, String)]) -> toml::Value {
         deep_merge(&mut merged, file);
     }
 
-    // Layer 3: env vars. `<PROVIDER>_API_KEY` maps to `[provider] api_key = ...`.
+    // Layer 3a: convenience env vars for common case.
+    // `<PROVIDER>_API_KEY` (e.g. GEMINI_API_KEY) → `[provider] api_key = ...`.
     for (name, _desc) in setup::SUPPORTED_PROVIDERS {
         let var = format!("{}_API_KEY", name.to_uppercase());
         if let Ok(key) = std::env::var(&var) {
@@ -161,7 +162,22 @@ pub fn merged_toml(overrides: &[(Vec<String>, String)]) -> toml::Value {
         }
     }
 
-    // Layer 4: CLI overrides.
+    // Layer 3b: generic `SHOT_CONFIG_<SECTION>_<FIELD>=value` env vars,
+    // mirroring the `--config.<section>.<field>=value` CLI flag 1:1.
+    // First underscore after the prefix splits section from field; rest
+    // of the underscores are preserved in the field name (so multi-word
+    // fields like `max_turns` and `api_key` round-trip correctly).
+    // Takes precedence over the convenience layer above.
+    for (name, val) in std::env::vars() {
+        let Some(rest) = name.strip_prefix("SHOT_CONFIG_") else { continue; };
+        if val.is_empty() { continue; }
+        let Some(sep) = rest.find('_') else { continue; };
+        let section = rest[..sep].to_lowercase();
+        let field = rest[sep + 1..].to_lowercase();
+        set_path(&mut merged, &[section, field], parse_scalar(&val));
+    }
+
+    // Layer 4: CLI overrides (highest priority).
     for (p, v) in overrides {
         set_path(&mut merged, p, parse_scalar(v));
     }
