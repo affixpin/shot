@@ -2,13 +2,20 @@
 
 Telegram bot where each chat gets its own shot container. Node.js polls Telegram, spawns `affixpin/shot:latest` per message, mounts `user_data/<chat_id>/` into the container so sessions persist per user.
 
-An LLM proxy runs inside the Node.js server on `127.0.0.1:3000`. Shot containers are configured to hit the proxy instead of Gemini directly, so the API key never enters a shot container and can't be exfiltrated through a tool call.
+A provider proxy runs inside the Node.js server. Shot containers hit the proxy (via `host.docker.internal`) instead of Gemini or Jina directly, so no third-party API keys ever enter a container and can't be exfiltrated through a tool call. Path routing:
+
+- `/gemini/*` → Gemini chat completions
+- `/jina/search/*` → Jina search
+- `/jina/read/*` → Jina reader
+
+The `web_search` and `web_read` tool definitions are overwritten on the VM to point at the proxy paths; default shot tool tomls are otherwise untouched.
 
 ## local
 
 ```
 export TELEGRAM_TOKEN=...
 export GEMINI_API_KEY=...
+export JINA_API_KEY=...   # optional; enables web_search and web_read
 npm install
 npm start
 ```
@@ -33,6 +40,7 @@ Single-VM deployment on a free-tier `e2-micro` with secrets in Secret Manager. T
 # Add your secret values
 echo -n "TELEGRAM_BOT_TOKEN" | gcloud secrets versions add telegram-token --data-file=-
 echo -n "GEMINI_API_KEY"     | gcloud secrets versions add gemini-api-key --data-file=-
+echo -n "JINA_API_KEY"       | gcloud secrets versions add jina-api-key   --data-file=-
 
 # Reboot so startup.sh picks up the new secret versions
 gcloud compute instances reset shot-bot --zone=us-central1-a

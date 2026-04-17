@@ -1,21 +1,21 @@
 import { spawn } from "node:child_process";
 import { mkdirSync, chownSync } from "node:fs";
 import { join } from "node:path";
-import { createServer } from "node:http";
+import { createServer, IncomingMessage, ServerResponse } from "node:http";
 import { createInterface } from "node:readline";
 
-const { TELEGRAM_TOKEN, GEMINI_API_KEY } = process.env;
+const { TELEGRAM_TOKEN, GEMINI_API_KEY, JINA_API_KEY } = process.env;
 if (!TELEGRAM_TOKEN || !GEMINI_API_KEY) {
-  console.error("set TELEGRAM_TOKEN and GEMINI_API_KEY");
+  console.error("set TELEGRAM_TOKEN and GEMINI_API_KEY (JINA_API_KEY optional)");
   process.exit(1);
 }
 
 const DATA = join(process.cwd(), "user_data");
+const TEMPLATE_HOST = process.env.SHOT_TEMPLATE_DIR ?? "/opt/shot-template";
 const IMAGE = process.env.SHOT_IMAGE ?? "affixpin/shot:latest";
 const MEMORY = process.env.SHOT_MEMORY ?? "128m";
 const CPUS = process.env.SHOT_CPUS ?? "0.5";
 const PROXY_PORT = Number(process.env.PROXY_PORT ?? 3000);
-const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/openai";
 
 mkdirSync(DATA, { recursive: true });
 
@@ -24,39 +24,75 @@ type Update = {
   message?: { text?: string; chat: { id: number } };
 };
 
-// LLM proxy. Shot talks here instead of Gemini directly so the real key
-// never enters a container and can't be exfiltrated via a tool call.
+// ── Proxy ──────────────────────────────────────────────────────────────
+// Single HTTP server, path-routed. Shot containers hit us instead of the
+// upstreams directly, so no provider key ever enters a container.
+//
+//   /gemini/*       → https://generativelanguage.googleapis.com/v1beta/openai/*
+//   /jina/search/*  → https://s.jina.ai/*   (strips the prefix)
+//   /jina/read/*    → https://r.jina.ai/*   (strips the prefix)
+
+async function forward(
+  req: IncomingMessage,
+  res: ServerResponse,
+  target: string,
+  authKey: string,
+) {
+  const body: Buffer[] = [];
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    for await (const chunk of req) body.push(chunk);
+  }
+  const upstream = await fetch(target, {
+    method: req.method,
+    headers: {
+      accept: String(req.headers.accept ?? "application/json"),
+      "content-type": String(req.headers["content-type"] ?? "application/json"),
+      authorization: `Bearer ${authKey}`,
+    },
+    body: body.length ? Buffer.concat(body) : undefined,
+  });
+  res.writeHead(upstream.status, {
+    "content-type": upstream.headers.get("content-type") ?? "text/plain",
+  });
+  if (upstream.body) {
+    for await (const chunk of upstream.body) res.write(chunk);
+  }
+  res.end();
+}
+
 createServer(async (req, res) => {
   try {
-    if (req.method !== "POST" || !req.url) {
-      res.writeHead(404).end();
+    const url = req.url ?? "";
+    if (url.startsWith("/gemini/")) {
+      await forward(
+        req,
+        res,
+        `https://generativelanguage.googleapis.com/v1beta/openai${url.slice(7)}`,
+        GEMINI_API_KEY!,
+      );
       return;
     }
-    const body: Buffer[] = [];
-    for await (const chunk of req) body.push(chunk);
-    const upstream = await fetch(`${GEMINI_BASE}${req.url}`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${GEMINI_API_KEY}`,
-      },
-      body: Buffer.concat(body),
-    });
-    res.writeHead(upstream.status, {
-      "content-type": upstream.headers.get("content-type") ?? "application/json",
-    });
-    if (upstream.body) {
-      for await (const chunk of upstream.body) res.write(chunk);
+    if (url.startsWith("/jina/search")) {
+      if (!JINA_API_KEY) { res.writeHead(503).end(); return; }
+      await forward(req, res, `https://s.jina.ai${url.slice("/jina/search".length)}`, JINA_API_KEY);
+      return;
     }
-    res.end();
+    if (url.startsWith("/jina/read/")) {
+      if (!JINA_API_KEY) { res.writeHead(503).end(); return; }
+      await forward(req, res, `https://r.jina.ai/${url.slice("/jina/read/".length)}`, JINA_API_KEY);
+      return;
+    }
+    res.writeHead(404).end();
   } catch (e: any) {
     console.error("proxy:", e.message);
     if (!res.headersSent) res.writeHead(502);
     res.end();
   }
 }).listen(PROXY_PORT, "0.0.0.0", () => {
-  console.log(`proxy: 0.0.0.0:${PROXY_PORT} -> ${GEMINI_BASE}`);
+  console.log(`proxy: 0.0.0.0:${PROXY_PORT}`);
 });
+
+// ── Telegram helpers ───────────────────────────────────────────────────
 
 const tg = (method: string, body: object) =>
   fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/${method}`, {
@@ -67,6 +103,23 @@ const tg = (method: string, body: object) =>
 
 const trunc = (s: string, n: number) => (s.length > n ? s.slice(0, n) + "…" : s);
 
+const htmlEscape = (s: string) =>
+  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+// Minimal GFM→Telegram-HTML conversion. Covers the pieces Gemini commonly
+// emits: fenced code blocks, inline code, bold. Everything else falls
+// through as plain text (Telegram HTML doesn't support headings/lists anyway).
+function mdToHtml(md: string): string {
+  let s = htmlEscape(md);
+  // Fenced code blocks first so their contents don't get re-processed.
+  s = s.replace(/```(\w*)\n?([\s\S]*?)```/g, (_m, _lang, code) => `<pre>${code}</pre>`);
+  // Inline code
+  s = s.replace(/`([^`\n]+)`/g, "<code>$1</code>");
+  // Bold **x**
+  s = s.replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>");
+  return s;
+}
+
 const formatArgs = (args: Record<string, any> | undefined) =>
   !args ? "" : Object.entries(args)
     .map(([k, v]) => `${k}=${typeof v === "string" ? trunc(v, 60) : JSON.stringify(v)}`)
@@ -74,26 +127,41 @@ const formatArgs = (args: Record<string, any> | undefined) =>
 
 async function sendEvent(chat_id: string, event: { type: string; data: any }) {
   const { type, data } = event;
-  let text: string | undefined;
   switch (type) {
     case "tool.call":
-      text = `🔧 ${data.name}(${formatArgs(data.args)})`;
+      await tg("sendMessage", {
+        chat_id,
+        text: `🔧 ${data.name}(${formatArgs(data.args)})`,
+      });
       break;
-    case "tool.result":
-      text = `↩️ ${trunc(String(data.result ?? "").trim() || "(empty)", 1000)}`;
+    case "tool.result": {
+      const result = String(data.result ?? "").trim() || "(empty)";
+      await tg("sendMessage", {
+        chat_id,
+        text: `↩️\n<pre>${htmlEscape(trunc(result, 3500))}</pre>`,
+        parse_mode: "HTML",
+      });
       break;
+    }
     case "llm.response":
-      if (data.content?.trim()) text = data.content.trim();
+      if (data.content?.trim()) {
+        await tg("sendMessage", {
+          chat_id,
+          text: trunc(mdToHtml(data.content.trim()), 4000),
+          parse_mode: "HTML",
+        });
+      }
       break;
     case "llm.error":
-      text = `❌ ${data.error}`;
+      await tg("sendMessage", { chat_id, text: `❌ ${data.error}` });
       break;
     case "error":
-      text = `❌ ${data.message}`;
+      await tg("sendMessage", { chat_id, text: `❌ ${data.message}` });
       break;
   }
-  if (text) await tg("sendMessage", { chat_id, text: trunc(text, 4000) });
 }
+
+// ── Shot invocation ────────────────────────────────────────────────────
 
 async function handle({ message }: Update) {
   if (!message?.text) return;
@@ -106,8 +174,11 @@ async function handle({ message }: Update) {
   const proc = spawn("docker", [
     "run", "--rm",
     "--add-host=host.docker.internal:host-gateway",
-    "-e", `SHOT_CONFIG_GEMINI_LLM_URL=http://host.docker.internal:${PROXY_PORT}`,
+    "-e", `SHOT_CONFIG_GEMINI_LLM_URL=http://host.docker.internal:${PROXY_PORT}/gemini`,
     "-e", "SHOT_CONFIG_GEMINI_API_KEY=via-proxy",
+    "-e", "SHOT_CONFIG_AGENT_TOOLS_DIR=/srv/shot-template/tools",
+    "-e", "SHOT_CONFIG_AGENT_SOUL_FILE=/srv/shot-template/SOUL.md",
+    "-v", `${TEMPLATE_HOST}:/srv/shot-template:ro`,
     "-v", `${userDir}:/home/agent/.local/share/shot`,
     "--memory", MEMORY, "--cpus", CPUS,
     IMAGE, "--json", "--tools", `--session=${chat_id}`, message.text,
@@ -136,6 +207,8 @@ async function handle({ message }: Update) {
     clearTimeout(killer);
   }
 }
+
+// ── Polling loop ───────────────────────────────────────────────────────
 
 console.log(`shot telegram bot polling (image: ${IMAGE})`);
 
