@@ -30,17 +30,17 @@ Easiest way to try shot is Docker.
 # simple question, no tools
 docker run --rm \
   -e SHOT_CONFIG_GEMINI_API_KEY=YOUR_KEY \
-  affixpin/shot:main "what's the capital of France?"
+  affixpin/shot "what's the capital of France?"
 
 # with the default tools (file I/O, shell, grep, etc.)
 docker run --rm \
   -e SHOT_CONFIG_GEMINI_API_KEY=YOUR_KEY \
-  affixpin/shot:main --tools "list the files in /etc and summarize"
+  affixpin/shot --tools "list the files in /etc and summarize"
 
 # with web search (free Jina key at https://jina.ai/reader)
 docker run --rm \
   -e SHOT_CONFIG_GEMINI_API_KEY=YOUR_KEY \
-  affixpin/shot:main --tools \
+  affixpin/shot --tools \
   --tools.web_search.vars.jina_api_key=YOUR_JINA_KEY \
   "who is Dmytro Pintak?"
 ```
@@ -51,7 +51,7 @@ docker run --rm \
 docker run --rm \
   -e SHOT_CONFIG_AGENT_PROVIDER=anthropic \
   -e SHOT_CONFIG_ANTHROPIC_API_KEY=YOUR_KEY \
-  affixpin/shot:main --tools "what's in the current directory?"
+  affixpin/shot --tools "what's in the current directory?"
 ```
 
 ### openai
@@ -60,7 +60,7 @@ docker run --rm \
 docker run --rm \
   -e SHOT_CONFIG_AGENT_PROVIDER=openai \
   -e SHOT_CONFIG_OPENAI_API_KEY=YOUR_KEY \
-  affixpin/shot:main --tools "what's in the current directory?"
+  affixpin/shot --tools "what's in the current directory?"
 ```
 
 ### telegram bot in one container
@@ -71,7 +71,7 @@ Shot ships with a companion binary, `armaments`, that polls event sources and pr
 docker run --rm -i \
   -e SHOT_CONFIG_GEMINI_API_KEY=YOUR_GEMINI_KEY \
   -e BOT_TOKEN=YOUR_TELEGRAM_BOT_TOKEN \
-  affixpin/shot:main sh -c '
+  affixpin/shot sh -c '
     armaments telegram --vars.bot_token=$BOT_TOKEN \
       | shot --pipe --tools --tools.tg_send.vars.bot_token=$BOT_TOKEN
   '
