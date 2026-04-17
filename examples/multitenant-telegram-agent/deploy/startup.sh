@@ -20,11 +20,17 @@ docker pull affixpin/shot:latest || true
 # first-run bootstrap and writes the 11 default tool tomls + SOUL.md
 # into /opt/shot-template. We then overwrite the two tools that would
 # otherwise ship a Jina API key into the container.
+#
+# The mount must be owned by uid 1000 before the container runs,
+# because shot runs as user `agent` (uid 1000) inside the image and
+# can't write to a root-owned mount.
 mkdir -p /opt/shot-template
+chown 1000:1000 /opt/shot-template
 docker run --rm \
   -v /opt/shot-template:/home/agent/.local/share/shot \
   -e SHOT_CONFIG_GEMINI_API_KEY=placeholder \
   affixpin/shot:latest tools >/dev/null 2>&1 || true
+mkdir -p /opt/shot-template/tools  # safety in case bootstrap silently failed
 
 cat > /opt/shot-template/tools/web_search.toml <<'EOF'
 healthcheck = "which curl"
@@ -74,4 +80,6 @@ EOF
 # ── systemd ────────────────────────────────────────────────────────────
 install -m 644 "$APP_DIR/deploy/shot-bot.service" /etc/systemd/system/shot-bot.service
 systemctl daemon-reload
-systemctl enable --now shot-bot
+systemctl enable shot-bot
+# restart (not start) so reruns pick up fresh code / env / secrets
+systemctl restart shot-bot
