@@ -63,6 +63,16 @@ llm_url = "https://generativelanguage.googleapis.com/v1beta/openai"
 model = "gemini-3-flash-preview"
 reasoning = "high"
 api_key = ""
+
+[openai]
+llm_url = "https://api.openai.com/v1"
+model = "gpt-4o-mini"
+api_key = ""
+
+[anthropic]
+llm_url = "https://api.anthropic.com/v1"
+model = "claude-sonnet-4-6"
+api_key = ""
 "#;
 
 // ── Paths ──────────────────────────────────────────────────────────────
@@ -278,9 +288,18 @@ fn die_missing(provider: &str, missing: &[String]) -> ! {
     eprintln!("  export SHOT_CONFIG_{section_upper}_API_KEY=<key>");
     eprintln!("  shot --config.{provider}.api_key=<key> \"...\"");
     eprintln!("  shot --config.{provider}.api_key=<key> config show > ~/.config/shot/agent.toml");
-    if provider == "gemini" {
+    if let Some(url) = key_url(provider) {
         eprintln!();
-        eprintln!("Get a key: https://aistudio.google.com/apikey");
+        eprintln!("Get a key: {url}");
     }
     std::process::exit(1);
+}
+
+fn key_url(provider: &str) -> Option<&'static str> {
+    match provider {
+        "gemini"    => Some("https://aistudio.google.com/apikey"),
+        "openai"    => Some("https://platform.openai.com/api-keys"),
+        "anthropic" => Some("https://console.anthropic.com/settings/keys"),
+        _ => None,
+    }
 }
