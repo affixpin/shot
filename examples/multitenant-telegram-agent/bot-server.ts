@@ -1,10 +1,8 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { spawn } from "node:child_process";
 import { mkdirSync, chownSync } from "node:fs";
 import { join } from "node:path";
 import { createServer } from "node:http";
-
-const exec = promisify(execFile);
+import { createInterface } from "node:readline";
 
 const { TELEGRAM_TOKEN, GEMINI_API_KEY } = process.env;
 if (!TELEGRAM_TOKEN || !GEMINI_API_KEY) {
@@ -26,9 +24,8 @@ type Update = {
   message?: { text?: string; chat: { id: number } };
 };
 
-// Proxy LLM endpoint. Shot containers talk to this instead of Gemini
-// directly, so the real API key never enters a shot container and can't
-// be exfiltrated via tool calls.
+// LLM proxy. Shot talks here instead of Gemini directly so the real key
+// never enters a container and can't be exfiltrated via a tool call.
 createServer(async (req, res) => {
   try {
     if (req.method !== "POST" || !req.url) {
@@ -58,9 +55,6 @@ createServer(async (req, res) => {
     res.end();
   }
 }).listen(PROXY_PORT, "0.0.0.0", () => {
-  // Bind on all interfaces so containers reach it via host.docker.internal
-  // (which resolves to the Docker bridge gateway, not loopback). GCP's
-  // default-deny ingress firewall keeps this port private in practice.
   console.log(`proxy: 0.0.0.0:${PROXY_PORT} -> ${GEMINI_BASE}`);
 });
 
@@ -71,29 +65,75 @@ const tg = (method: string, body: object) =>
     body: JSON.stringify(body),
   });
 
+const trunc = (s: string, n: number) => (s.length > n ? s.slice(0, n) + "…" : s);
+
+const formatArgs = (args: Record<string, any> | undefined) =>
+  !args ? "" : Object.entries(args)
+    .map(([k, v]) => `${k}=${typeof v === "string" ? trunc(v, 60) : JSON.stringify(v)}`)
+    .join(", ");
+
+async function sendEvent(chat_id: string, event: { type: string; data: any }) {
+  const { type, data } = event;
+  let text: string | undefined;
+  switch (type) {
+    case "tool.call":
+      text = `🔧 ${data.name}(${formatArgs(data.args)})`;
+      break;
+    case "tool.result":
+      text = `↩️ ${trunc(String(data.result ?? "").trim() || "(empty)", 1000)}`;
+      break;
+    case "llm.response":
+      if (data.content?.trim()) text = data.content.trim();
+      break;
+    case "llm.error":
+      text = `❌ ${data.error}`;
+      break;
+    case "error":
+      text = `❌ ${data.message}`;
+      break;
+  }
+  if (text) await tg("sendMessage", { chat_id, text: trunc(text, 4000) });
+}
+
 async function handle({ message }: Update) {
   if (!message?.text) return;
   const chat_id = String(message.chat.id);
   const userDir = join(DATA, chat_id);
   mkdirSync(userDir, { recursive: true });
-  // Shot runs as uid 1000 ('agent') inside the container. Chown the mount
-  // so it can write its session file. No-op if we lack privileges (local dev).
   try { chownSync(userDir, 1000, 1000); } catch {}
   console.log(`[${chat_id}] ${message.text}`);
+
+  const proc = spawn("docker", [
+    "run", "--rm",
+    "--add-host=host.docker.internal:host-gateway",
+    "-e", `SHOT_CONFIG_GEMINI_LLM_URL=http://host.docker.internal:${PROXY_PORT}`,
+    "-e", "SHOT_CONFIG_GEMINI_API_KEY=via-proxy",
+    "-v", `${userDir}:/home/agent/.local/share/shot`,
+    "--memory", MEMORY, "--cpus", CPUS,
+    IMAGE, "--json", "--tools", `--session=${chat_id}`, message.text,
+  ], { stdio: ["ignore", "pipe", "pipe"] });
+
+  const killer = setTimeout(() => proc.kill("SIGKILL"), 120_000);
+  let sawEvents = false;
   try {
-    const { stdout } = await exec("docker", [
-      "run", "--rm",
-      "--add-host=host.docker.internal:host-gateway",
-      "-e", `SHOT_CONFIG_GEMINI_LLM_URL=http://host.docker.internal:${PROXY_PORT}`,
-      "-e", "SHOT_CONFIG_GEMINI_API_KEY=via-proxy",
-      "-v", `${userDir}:/home/agent/.local/share/shot`,
-      "--memory", MEMORY, "--cpus", CPUS,
-      IMAGE, "--quiet", "--tools", `--session=${chat_id}`, message.text,
-    ], { maxBuffer: 10 * 1024 * 1024, timeout: 120_000 });
-    await tg("sendMessage", { chat_id, text: stdout.trim() || "(no output)" });
+    const rl = createInterface({ input: proc.stdout });
+    for await (const line of rl) {
+      if (!line.trim()) continue;
+      try {
+        const event = JSON.parse(line);
+        sawEvents = true;
+        await sendEvent(chat_id, event);
+      } catch {}
+    }
+    const code: number | null = await new Promise((r) => proc.on("close", r));
+    if (code !== 0 && !sawEvents) {
+      await tg("sendMessage", { chat_id, text: "error processing your message" });
+    }
   } catch (e: any) {
     console.error(`[${chat_id}]`, e.message);
-    await tg("sendMessage", { chat_id, text: "error processing your message" });
+    if (!sawEvents) await tg("sendMessage", { chat_id, text: "error processing your message" });
+  } finally {
+    clearTimeout(killer);
   }
 }
 
