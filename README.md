@@ -2,6 +2,7 @@
   <img src="shooter.jpeg" width="200" />
   <h1>shot agent</h1>
   <p><strong>minimal, portable unix-friendly agent</strong></p>
+  <p>try the live demo: <a href="./examples/multitenant-telegram-agent">multitenant telegram bot</a> → <a href="https://t.me/autoshot_bot">@autoshot_bot</a></p>
 </div>
 
 ---
