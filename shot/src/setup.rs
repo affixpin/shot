@@ -16,9 +16,3 @@ pub const DEFAULT_TOOLS: &[(&str, &str)] = &[
     ("web_read.toml", include_str!("../defaults/tools/web_read.toml")),
     ("tg_send.toml", include_str!("../defaults/tools/tg_send.toml")),
 ];
-
-/// (name, short description) — canonical list surfaced in CLI help,
-/// validation errors, and the env var layer in `Config::load`.
-pub const SUPPORTED_PROVIDERS: &[(&str, &str)] = &[
-    ("gemini", "Google Gemini (gemini-3-flash-preview)"),
-];

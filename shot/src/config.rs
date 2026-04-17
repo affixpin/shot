@@ -147,27 +147,11 @@ pub fn merged_toml(overrides: &[(Vec<String>, String)]) -> toml::Value {
         deep_merge(&mut merged, file);
     }
 
-    // Layer 3a: convenience env vars for common case.
-    // `<PROVIDER>_API_KEY` (e.g. GEMINI_API_KEY) → `[provider] api_key = ...`.
-    for (name, _desc) in setup::SUPPORTED_PROVIDERS {
-        let var = format!("{}_API_KEY", name.to_uppercase());
-        if let Ok(key) = std::env::var(&var) {
-            if !key.is_empty() {
-                set_path(
-                    &mut merged,
-                    &[name.to_string(), "api_key".to_string()],
-                    toml::Value::String(key),
-                );
-            }
-        }
-    }
-
-    // Layer 3b: generic `SHOT_CONFIG_<SECTION>_<FIELD>=value` env vars,
-    // mirroring the `--config.<section>.<field>=value` CLI flag 1:1.
-    // First underscore after the prefix splits section from field; rest
-    // of the underscores are preserved in the field name (so multi-word
-    // fields like `max_turns` and `api_key` round-trip correctly).
-    // Takes precedence over the convenience layer above.
+    // Layer 3: `SHOT_CONFIG_<SECTION>_<FIELD>=value` env vars, mirroring
+    // the `--config.<section>.<field>=value` CLI flag 1:1. First underscore
+    // after the prefix splits section from field; remaining underscores are
+    // preserved in the field name (so multi-word fields like `max_turns`
+    // and `api_key` round-trip correctly against the TOML schema).
     for (name, val) in std::env::vars() {
         let Some(rest) = name.strip_prefix("SHOT_CONFIG_") else { continue; };
         if val.is_empty() { continue; }
@@ -271,14 +255,14 @@ fn die(title: &str, msg: &str) -> ! {
 }
 
 fn die_missing(provider: &str, missing: &[String]) -> ! {
-    let env_var = format!("{}_API_KEY", provider.to_uppercase());
+    let section_upper = provider.to_uppercase();
     eprintln!("Config incomplete. Missing or empty:");
     for m in missing {
         eprintln!("  - {m}");
     }
     eprintln!();
     eprintln!("Fix by any of:");
-    eprintln!("  export {env_var}=<key>");
+    eprintln!("  export SHOT_CONFIG_{section_upper}_API_KEY=<key>");
     eprintln!("  shot --config.{provider}.api_key=<key> \"...\"");
     eprintln!("  shot --config.{provider}.api_key=<key> config show > ~/.config/shot/agent.toml");
     if provider == "gemini" {
