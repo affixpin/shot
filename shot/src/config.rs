@@ -350,27 +350,31 @@ fn die_missing(provider: &str, missing: &[String]) -> ! {
 }
 
 fn die_ambiguous_provider(configured: &[String]) -> ! {
+    let example = configured.first().map(String::as_str).unwrap_or("gemini");
     eprintln!("Multiple providers have keys set: {}.", configured.join(", "));
     eprintln!();
-    eprintln!("Pick one explicitly:");
-    for name in configured {
-        eprintln!("  export SHOT_CONFIG_AGENT_PROVIDER={name}");
-    }
+    eprintln!("Pick one by any of:");
+    eprintln!("  export SHOT_CONFIG_AGENT_PROVIDER={example}");
+    eprintln!("  shot --config.agent.provider={example} \"...\"");
+    eprintln!("  add `provider = \"{example}\"` to [agent] in ~/.config/shot/agent.toml");
     std::process::exit(1);
 }
 
 fn die_no_provider_configured() -> ! {
-    eprintln!("No provider configured. Set an API key for one of:");
+    eprintln!("No provider configured.");
     eprintln!();
+    eprintln!("Get a key:");
     for (name, url) in KNOWN_PROVIDERS {
-        let section_upper = name.to_uppercase();
-        eprintln!("  export SHOT_CONFIG_{section_upper}_API_KEY=<key>");
-        eprintln!("      {url}");
+        eprintln!("  {name:<10} {url}");
     }
     eprintln!();
-    eprintln!("Shot picks the provider automatically from whichever key is set.");
-    eprintln!("To force a specific provider, also set:");
-    eprintln!("  export SHOT_CONFIG_AGENT_PROVIDER=<name>");
+    eprintln!("Provide it by any of:");
+    eprintln!("  env var   export SHOT_CONFIG_<PROVIDER>_API_KEY=<key>");
+    eprintln!("  CLI flag  shot --config.<provider>.api_key=<key> \"...\"");
+    eprintln!("  file      shot --config.<provider>.api_key=<key> config show > ~/.config/shot/agent.toml");
+    eprintln!();
+    eprintln!("Shot auto-picks the provider from whichever key is set.");
+    eprintln!("To force one: SHOT_CONFIG_AGENT_PROVIDER=<name> or --config.agent.provider=<name>");
     std::process::exit(1);
 }
 
