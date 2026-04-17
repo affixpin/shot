@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, chownSync } from "node:fs";
 import { join } from "node:path";
 import { createServer } from "node:http";
 
@@ -73,6 +73,9 @@ async function handle({ message }: Update) {
   const chat_id = String(message.chat.id);
   const userDir = join(DATA, chat_id);
   mkdirSync(userDir, { recursive: true });
+  // Shot runs as uid 1000 ('agent') inside the container. Chown the mount
+  // so it can write its session file. No-op if we lack privileges (local dev).
+  try { chownSync(userDir, 1000, 1000); } catch {}
   console.log(`[${chat_id}] ${message.text}`);
   try {
     const { stdout } = await exec("docker", [
