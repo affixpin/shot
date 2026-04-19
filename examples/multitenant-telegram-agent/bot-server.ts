@@ -253,6 +253,7 @@ while (true) {
     if (!ok) continue;
     for (const u of result) {
       offset = u.update_id;
+      console.log("update:", JSON.stringify(u).slice(0, 500));
       handle(u).catch(console.error);
     }
   } catch (e: any) {
