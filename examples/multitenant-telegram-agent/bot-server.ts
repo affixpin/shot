@@ -21,8 +21,19 @@ mkdirSync(DATA, { recursive: true });
 
 type Update = {
   update_id: number;
-  message?: { text?: string; chat: { id: number } };
+  message?: {
+    text?: string;
+    message_id: number;
+    chat: { id: number; type: "private" | "group" | "supergroup" | "channel" };
+  };
 };
+
+// Learn our own @handle at boot so we can detect mentions in groups.
+const me = (await (await fetch(
+  `https://api.telegram.org/bot${TELEGRAM_TOKEN}/getMe`,
+)).json()) as { ok: boolean; result: { username: string } };
+const BOT_HANDLE = "@" + me.result.username;
+console.log(`bot handle: ${BOT_HANDLE}`);
 
 // ── Proxy ──────────────────────────────────────────────────────────────
 // Single HTTP server, path-routed. Shot containers hit us instead of the
@@ -125,19 +136,21 @@ const formatArgs = (args: Record<string, any> | undefined) =>
     .map(([k, v]) => `${k}=${typeof v === "string" ? trunc(v, 60) : JSON.stringify(v)}`)
     .join(", ");
 
-async function sendEvent(chat_id: string, event: { type: string; data: any }) {
+async function sendEvent(
+  chat_id: string,
+  reply_to: number | undefined,
+  event: { type: string; data: any },
+) {
   const { type, data } = event;
+  const base = { chat_id, reply_to_message_id: reply_to };
   switch (type) {
     case "tool.call":
-      await tg("sendMessage", {
-        chat_id,
-        text: `🔧 ${data.name}(${formatArgs(data.args)})`,
-      });
+      await tg("sendMessage", { ...base, text: `🔧 ${data.name}(${formatArgs(data.args)})` });
       break;
     case "tool.result": {
       const result = String(data.result ?? "").trim() || "(empty)";
       await tg("sendMessage", {
-        chat_id,
+        ...base,
         text: `↩️\n<pre>${htmlEscape(trunc(result, 3500))}</pre>`,
         parse_mode: "HTML",
       });
@@ -146,17 +159,17 @@ async function sendEvent(chat_id: string, event: { type: string; data: any }) {
     case "llm.response":
       if (data.content?.trim()) {
         await tg("sendMessage", {
-          chat_id,
+          ...base,
           text: trunc(mdToHtml(data.content.trim()), 4000),
           parse_mode: "HTML",
         });
       }
       break;
     case "llm.error":
-      await tg("sendMessage", { chat_id, text: `❌ ${data.error}` });
+      await tg("sendMessage", { ...base, text: `❌ ${data.error}` });
       break;
     case "error":
-      await tg("sendMessage", { chat_id, text: `❌ ${data.message}` });
+      await tg("sendMessage", { ...base, text: `❌ ${data.message}` });
       break;
   }
 }
@@ -165,26 +178,44 @@ async function sendEvent(chat_id: string, event: { type: string; data: any }) {
 
 async function handle({ message }: Update) {
   if (!message?.text) return;
+
+  // In groups/supergroups, only respond when @mentioned. Strip the handle
+  // so shot doesn't see it in the message text.
+  let text = message.text;
+  const isGroup = message.chat.type !== "private";
+  if (isGroup) {
+    if (!text.includes(BOT_HANDLE)) return;
+    text = text.replaceAll(BOT_HANDLE, "").trim();
+    if (!text) return;
+  }
+
   const chat_id = String(message.chat.id);
+  const message_id = message.message_id;
   const userDir = join(DATA, chat_id);
   mkdirSync(userDir, { recursive: true });
   try { chownSync(userDir, 1000, 1000); } catch {}
-  console.log(`[${chat_id}] ${message.text}`);
+  console.log(`[${chat_id}${isGroup ? " group" : ""}] ${text}`);
 
-  const proc = spawn("docker", [
+  const args = [
     "run", "--rm",
     "--add-host=host.docker.internal:host-gateway",
     "-e", `SHOT_CONFIG_GEMINI_LLM_URL=http://host.docker.internal:${PROXY_PORT}/gemini`,
     "-e", "SHOT_CONFIG_GEMINI_API_KEY=via-proxy",
     "-e", "SHOT_CONFIG_AGENT_TOOLS_DIR=/srv/shot-template/tools",
     "-e", "SHOT_CONFIG_AGENT_SOUL_FILE=/srv/shot-template/SOUL.md",
+    "-e", "SHOT_CONFIG_AGENT_SKILLS_DIR=/srv/shot-template/skills",
     "-v", `${TEMPLATE_HOST}:/srv/shot-template:ro`,
     "-v", `${userDir}:/home/agent/.local/share/shot`,
     "--memory", MEMORY, "--cpus", CPUS,
-    IMAGE, "--json", "--tools", `--session=${chat_id}`, message.text,
-  ], { stdio: ["ignore", "pipe", "pipe"] });
+    IMAGE, "--json", "--tools", `--session=${chat_id}`,
+  ];
+  if (isGroup) args.push("--skill=project_manager");
+  args.push(text);
+
+  const proc = spawn("docker", args, { stdio: ["ignore", "pipe", "pipe"] });
 
   const killer = setTimeout(() => proc.kill("SIGKILL"), 120_000);
+  const replyTo = isGroup ? message_id : undefined;
   let sawEvents = false;
   try {
     const rl = createInterface({ input: proc.stdout });
@@ -193,16 +224,16 @@ async function handle({ message }: Update) {
       try {
         const event = JSON.parse(line);
         sawEvents = true;
-        await sendEvent(chat_id, event);
+        await sendEvent(chat_id, replyTo, event);
       } catch {}
     }
     const code: number | null = await new Promise((r) => proc.on("close", r));
     if (code !== 0 && !sawEvents) {
-      await tg("sendMessage", { chat_id, text: "error processing your message" });
+      await tg("sendMessage", { chat_id, text: "error processing your message", reply_to_message_id: replyTo });
     }
   } catch (e: any) {
     console.error(`[${chat_id}]`, e.message);
-    if (!sawEvents) await tg("sendMessage", { chat_id, text: "error processing your message" });
+    if (!sawEvents) await tg("sendMessage", { chat_id, text: "error processing your message", reply_to_message_id: replyTo });
   } finally {
     clearTimeout(killer);
   }
