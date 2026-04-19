@@ -236,14 +236,22 @@ fn apply_auto_detect(merged: &mut toml::Value) {
 
 // ── Auto-bootstrap ─────────────────────────────────────────────────────
 
-/// On first run, extract embedded defaults (tools + SOUL.md) to disk.
-/// Skipped entirely if the target directory already exists, so user
-/// customizations are never overwritten.
-fn bootstrap_defaults(tools_dir: &str, soul_file: &str) {
+/// On first run, extract embedded defaults (tools + skills + SOUL.md) to disk.
+/// Each target is checked independently; whichever doesn't exist gets
+/// populated. Once a directory/file exists, it's never overwritten — user
+/// customizations and edits survive upgrades.
+fn bootstrap_defaults(tools_dir: &str, soul_file: &str, skills_dir: &str) {
     let tools_path = Path::new(tools_dir);
     if !tools_path.exists() && std::fs::create_dir_all(tools_path).is_ok() {
         for (name, content) in setup::DEFAULT_TOOLS {
             let _ = std::fs::write(tools_path.join(name), content);
+        }
+    }
+
+    let skills_path = Path::new(skills_dir);
+    if !skills_path.exists() && std::fs::create_dir_all(skills_path).is_ok() {
+        for (name, content) in setup::DEFAULT_SKILLS {
+            let _ = std::fs::write(skills_path.join(name), content);
         }
     }
 
@@ -318,7 +326,7 @@ impl Config {
         };
 
         // First-run bootstrap: extract embedded defaults to disk.
-        bootstrap_defaults(&tools_dir, &soul_file);
+        bootstrap_defaults(&tools_dir, &soul_file, &skills_dir);
 
         Self {
             llm_url: provider.llm_url,

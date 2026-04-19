@@ -16,3 +16,7 @@ pub const DEFAULT_TOOLS: &[(&str, &str)] = &[
     ("web_read.toml", include_str!("../defaults/tools/web_read.toml")),
     ("tg_send.toml", include_str!("../defaults/tools/tg_send.toml")),
 ];
+
+pub const DEFAULT_SKILLS: &[(&str, &str)] = &[
+    ("project_manager.md", include_str!("../defaults/skills/project_manager.md")),
+];
