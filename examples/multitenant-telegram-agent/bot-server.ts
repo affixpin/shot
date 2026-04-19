@@ -25,15 +25,17 @@ type Update = {
     text?: string;
     message_id: number;
     chat: { id: number; type: "private" | "group" | "supergroup" | "channel" };
+    reply_to_message?: { from?: { id: number } };
   };
 };
 
-// Learn our own @handle at boot so we can detect mentions in groups.
+// Learn our own identity at boot so we can detect mentions + replies-to-bot.
 const me = (await (await fetch(
   `https://api.telegram.org/bot${TELEGRAM_TOKEN}/getMe`,
-)).json()) as { ok: boolean; result: { username: string } };
+)).json()) as { ok: boolean; result: { id: number; username: string } };
+const BOT_ID = me.result.id;
 const BOT_HANDLE = "@" + me.result.username;
-console.log(`bot handle: ${BOT_HANDLE}`);
+console.log(`bot handle: ${BOT_HANDLE} (id: ${BOT_ID})`);
 
 // ── Proxy ──────────────────────────────────────────────────────────────
 // Single HTTP server, path-routed. Shot containers hit us instead of the
@@ -179,12 +181,15 @@ async function sendEvent(
 async function handle({ message }: Update) {
   if (!message?.text) return;
 
-  // In groups/supergroups, only respond when @mentioned. Strip the handle
-  // so shot doesn't see it in the message text.
+  // In groups/supergroups, only respond when @mentioned OR when the user
+  // is replying to one of the bot's own messages. Strip the handle so shot
+  // doesn't see it in the message text.
   let text = message.text;
   const isGroup = message.chat.type !== "private";
   if (isGroup) {
-    if (!text.includes(BOT_HANDLE)) return;
+    const isMention = text.includes(BOT_HANDLE);
+    const isReplyToBot = message.reply_to_message?.from?.id === BOT_ID;
+    if (!isMention && !isReplyToBot) return;
     text = text.replaceAll(BOT_HANDLE, "").trim();
     if (!text) return;
   }
