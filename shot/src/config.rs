@@ -19,6 +19,8 @@ struct AgentConfig {
     soul_file: String,
     #[serde(default)]
     tools_dir: String,
+    #[serde(default)]
+    skills_dir: String,
     #[serde(default = "default_max_turns")]
     max_turns: usize,
 }
@@ -47,6 +49,7 @@ pub struct Config {
     pub soul_prompt: String,
     pub max_turns: usize,
     pub tools_dir: String,
+    pub skills_dir: String,
 }
 
 // ── Fallback defaults ──────────────────────────────────────────────────
@@ -308,6 +311,11 @@ impl Config {
         } else {
             resolve(&data_dir, &file.agent.tools_dir)
         };
+        let skills_dir = if file.agent.skills_dir.is_empty() {
+            data_dir.join("skills").to_string_lossy().to_string()
+        } else {
+            resolve(&data_dir, &file.agent.skills_dir)
+        };
 
         // First-run bootstrap: extract embedded defaults to disk.
         bootstrap_defaults(&tools_dir, &soul_file);
@@ -320,6 +328,7 @@ impl Config {
             soul_prompt: std::fs::read_to_string(&soul_file).unwrap_or_default(),
             max_turns: file.agent.max_turns,
             tools_dir,
+            skills_dir,
         }
     }
 }

@@ -30,6 +30,11 @@ struct Cli {
     #[arg(long)]
     soul_file: Option<String>,
 
+    /// Activate a named skill (repeatable). Reads <skills_dir>/<name>.md
+    /// and appends it to the system prompt after the soul.
+    #[arg(long)]
+    skill: Vec<String>,
+
     /// Message / scope instruction
     message: Vec<String>,
 
@@ -310,6 +315,15 @@ async fn main() {
 
     let config = shotclaw::Config::load(cli.config_file.as_deref(), &config_overrides);
 
+    // Resolve skill names to file contents.
+    let skills: Vec<String> = cli.skill.iter().map(|name| {
+        let path = PathBuf::from(&config.skills_dir).join(format!("{name}.md"));
+        std::fs::read_to_string(&path).unwrap_or_else(|e| {
+            eprintln!("Error reading skill '{name}' from {}: {e}", path.display());
+            std::process::exit(1);
+        })
+    }).collect();
+
     // Pipe mode: each stdin line is a message. Args not allowed.
     if cli.pipe {
         if !arg_msg.is_empty() {
@@ -334,6 +348,7 @@ async fn main() {
                 required_tools: required_tools.clone(),
                 soul_override: soul_override.clone(),
                 prompt_addition: prompt_addition.clone(),
+                skills: skills.clone(),
             };
 
             match shotclaw::run(&config, opts).await {
@@ -376,6 +391,7 @@ async fn main() {
         required_tools,
         soul_override,
         prompt_addition,
+        skills,
     };
 
     match shotclaw::run(&config, opts).await {

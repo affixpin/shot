@@ -53,6 +53,9 @@ pub struct RunOptions<'a> {
     pub soul_override: Option<String>,
     /// Append additional instructions to the soul.
     pub prompt_addition: Option<String>,
+    /// Activated skills — contents of `<skills_dir>/<name>.md` files, in
+    /// order, appended to the system prompt between soul and prompt_addition.
+    pub skills: Vec<String>,
 }
 
 // ── Run ────────────────────────────────────────────────────────────────
@@ -75,8 +78,12 @@ pub async fn run(
     );
     let handler = EventHandler;
 
-    // System prompt = (soul override OR SOUL.md) + (optional prompt addition)
+    // System prompt = soul + skills + prompt_addition
     let mut system = opts.soul_override.unwrap_or_else(|| config.soul_prompt.clone());
+    for skill in &opts.skills {
+        if !system.is_empty() { system.push_str("\n\n"); }
+        system.push_str(skill);
+    }
     if let Some(addition) = opts.prompt_addition {
         if !system.is_empty() { system.push_str("\n\n"); }
         system.push_str(&addition);
