@@ -30,10 +30,9 @@ struct Cli {
     #[arg(long)]
     soul_file: Option<String>,
 
-    /// Activate a named skill (repeatable). Reads <skills_dir>/<name>.md
-    /// and appends it to the system prompt after the soul.
-    #[arg(long)]
-    skill: Vec<String>,
+    /// Enable all skills in the skills directory
+    #[arg(long = "skills")]
+    all_skills: bool,
 
     /// Message / scope instruction
     message: Vec<String>,
@@ -203,6 +202,22 @@ fn extract_tool_flags(args: &mut Vec<String>) -> ToolFlags {
     ToolFlags { enabled, vars, metas }
 }
 
+/// Pre-parse `--skills.NAME` flags. Removes them from `args`.
+/// Returns the list of skill names to activate.
+fn extract_skill_flags(args: &mut Vec<String>) -> Vec<String> {
+    let mut enabled = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i].clone();
+        let Some(name) = arg.strip_prefix("--skills.") else { i += 1; continue; };
+        if !name.is_empty() && !enabled.contains(&name.to_string()) {
+            enabled.push(name.to_string());
+        }
+        args.remove(i);
+    }
+    enabled
+}
+
 /// Pre-parse `--config.X.Y.Z=value` flags. Removes them from `args`.
 /// Returns a list of (dotted-path, value) pairs to overlay onto the config tree.
 fn extract_config_flags(args: &mut Vec<String>) -> Vec<(Vec<String>, String)> {
@@ -222,9 +237,10 @@ fn extract_config_flags(args: &mut Vec<String>) -> Vec<(Vec<String>, String)> {
 
 #[tokio::main]
 async fn main() {
-    // Pre-parse --tools.X and --config.X flags before clap sees them
+    // Pre-parse --tools.X, --skills.X and --config.X flags before clap sees them
     let mut raw_args: Vec<String> = std::env::args().collect();
     let config_overrides = extract_config_flags(&mut raw_args);
+    let enabled_skills_list = extract_skill_flags(&mut raw_args);
     let ToolFlags { enabled: mut enabled_tools_list, vars: tool_overrides, metas: tool_metas } =
         extract_tool_flags(&mut raw_args);
 
@@ -315,14 +331,29 @@ async fn main() {
 
     let config = shotclaw::Config::load(cli.config_file.as_deref(), &config_overrides);
 
-    // Resolve skill names to file contents.
-    let skills: Vec<String> = cli.skill.iter().map(|name| {
-        let path = PathBuf::from(&config.skills_dir).join(format!("{name}.md"));
-        std::fs::read_to_string(&path).unwrap_or_else(|e| {
-            eprintln!("Error reading skill '{name}' from {}: {e}", path.display());
-            std::process::exit(1);
-        })
-    }).collect();
+    // Resolve skills. `--skills` activates everything in skills_dir;
+    // otherwise only the names passed via `--skills.NAME` are loaded.
+    let skills: Vec<String> = if cli.all_skills {
+        let mut entries: Vec<PathBuf> = std::fs::read_dir(&config.skills_dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().map(|x| x == "md").unwrap_or(false))
+            .collect();
+        entries.sort();
+        entries.into_iter()
+            .filter_map(|p| std::fs::read_to_string(&p).ok())
+            .collect()
+    } else {
+        enabled_skills_list.iter().map(|name| {
+            let path = PathBuf::from(&config.skills_dir).join(format!("{name}.md"));
+            std::fs::read_to_string(&path).unwrap_or_else(|e| {
+                eprintln!("Error reading skill '{name}' from {}: {e}", path.display());
+                std::process::exit(1);
+            })
+        }).collect()
+    };
 
     // Pipe mode: each stdin line is a message. Args not allowed.
     if cli.pipe {

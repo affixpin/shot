@@ -209,7 +209,7 @@ async function handle({ message }: Update) {
     "--memory", MEMORY, "--cpus", CPUS,
     IMAGE, "--json", "--tools", `--session=${chat_id}`,
   ];
-  if (isGroup) args.push("--skill=project_manager");
+  if (isGroup) args.push("--skills.project_manager");
   args.push(text);
 
   const proc = spawn("docker", args, { stdio: ["ignore", "pipe", "pipe"] });
