@@ -245,21 +245,31 @@ fn apply_auto_detect(merged: &mut toml::Value) {
 // ── Auto-bootstrap ─────────────────────────────────────────────────────
 
 /// On first run, extract embedded defaults (tools + skills + SOUL.md) to disk.
-/// Each target is checked independently; whichever doesn't exist gets
-/// populated. Once a directory/file exists, it's never overwritten — user
-/// customizations and edits survive upgrades.
+/// Per-file check: each default is written only if the target file doesn't
+/// already exist. Consequences:
+///   - A fresh dir gets the full bundle.
+///   - A customized dir keeps user edits but picks up newly-shipped
+///     defaults on shot upgrades.
+///   - A caller that pre-writes specific overrides (e.g. shot-gateway
+///     dropping proxy-routed web_search / web_read tomls) ends up with
+///     their overrides plus the untouched defaults, no extra bootstrap
+///     step needed.
 fn bootstrap_defaults(tools_dir: &str, soul_file: &str, skills_dir: &str) {
     let tools_path = Path::new(tools_dir);
-    if !tools_path.exists() && std::fs::create_dir_all(tools_path).is_ok() {
-        for (name, content) in setup::DEFAULT_TOOLS {
-            let _ = std::fs::write(tools_path.join(name), content);
+    let _ = std::fs::create_dir_all(tools_path);
+    for (name, content) in setup::DEFAULT_TOOLS {
+        let target = tools_path.join(name);
+        if !target.exists() {
+            let _ = std::fs::write(&target, content);
         }
     }
 
     let skills_path = Path::new(skills_dir);
-    if !skills_path.exists() && std::fs::create_dir_all(skills_path).is_ok() {
-        for (name, content) in setup::DEFAULT_SKILLS {
-            let _ = std::fs::write(skills_path.join(name), content);
+    let _ = std::fs::create_dir_all(skills_path);
+    for (name, content) in setup::DEFAULT_SKILLS {
+        let target = skills_path.join(name);
+        if !target.exists() {
+            let _ = std::fs::write(&target, content);
         }
     }
 
