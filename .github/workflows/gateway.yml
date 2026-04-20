@@ -32,6 +32,10 @@ jobs:
         id: meta
         with:
           images: affixpin/shot-gateway
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=raw,value=latest,enable={{is_default_branch}}
 
       - uses: docker/build-push-action@v5
         id: build
@@ -72,6 +76,10 @@ jobs:
         id: meta
         with:
           images: affixpin/shot-gateway
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Download digests
         uses: actions/download-artifact@v4
