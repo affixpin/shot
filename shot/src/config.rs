@@ -76,6 +76,14 @@ api_key = ""
 llm_url = "https://api.anthropic.com/v1"
 model = "claude-opus-4-7"
 api_key = ""
+
+# A "provider" that represents a local proxy (e.g. shot-gateway) in
+# front of a real provider. Authentication lives in the proxy, so no
+# api_key is required here. Override llm_url/model to match the proxy's
+# routing and the upstream model name.
+[gateway]
+llm_url = "http://host.docker.internal:3000/gemini"
+model = "gemini-3-flash-preview"
 "#;
 
 // ── Paths ──────────────────────────────────────────────────────────────
@@ -293,8 +301,12 @@ impl Config {
         // multiple providers have keys (ambiguous).
         let mut missing = Vec::new();
         if provider.llm_url.is_empty() { missing.push(format!("{provider_name}.llm_url")); }
-        if provider.api_key.is_empty() { missing.push(format!("{provider_name}.api_key")); }
         if provider.model.is_empty()   { missing.push(format!("{provider_name}.model")); }
+        // Providers that sit behind a local proxy (like `gateway`) don't
+        // need their own api_key — auth lives in the proxy.
+        if needs_api_key(&provider_name) && provider.api_key.is_empty() {
+            missing.push(format!("{provider_name}.api_key"));
+        }
         if !missing.is_empty() {
             let configured: Vec<String> = file.providers.keys()
                 .filter(|n| !lookup(n).api_key.is_empty())
@@ -405,4 +417,11 @@ fn key_url(provider: &str) -> Option<&'static str> {
     KNOWN_PROVIDERS.iter()
         .find(|(n, _)| *n == provider)
         .map(|(_, u)| *u)
+}
+
+/// Providers backed by a local proxy supply their own auth, so shot
+/// doesn't require an api_key for them. Extend the match if we add
+/// other proxy-based provider presets.
+fn needs_api_key(provider: &str) -> bool {
+    !matches!(provider, "gateway")
 }

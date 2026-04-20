@@ -289,9 +289,14 @@ pub async fn run(
     for turn in 0..config.max_turns {
         handler.on_llm_request(turn, messages.len());
 
-        let resp = client
-            .post(format!("{}/chat/completions", config.llm_url))
-            .header("Authorization", format!("Bearer {}", config.api_key))
+        let mut req = client
+            .post(format!("{}/chat/completions", config.llm_url));
+        // Skip Authorization entirely when no key is configured — typically
+        // means a proxy in front of the real provider handles auth.
+        if !config.api_key.is_empty() {
+            req = req.header("Authorization", format!("Bearer {}", config.api_key));
+        }
+        let resp = req
             .json(&ChatRequest {
                 model: Some(config.model.clone()),
                 messages: messages.clone(),

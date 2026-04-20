@@ -30,7 +30,7 @@ mkdir -p /opt/shot-template
 chown 1000:1000 /opt/shot-template
 docker run --rm \
   -v /opt/shot-template:/home/agent/.local/share/shot \
-  -e SHOT_CONFIG_GEMINI_API_KEY=placeholder \
+  -e SHOT_CONFIG_AGENT_PROVIDER=gateway \
   affixpin/shot:latest tools >/dev/null 2>&1 || true
 mkdir -p /opt/shot-template/tools
 

@@ -207,8 +207,8 @@ async function handle({ message }: Update) {
   const args = [
     "run", "--rm",
     "--add-host=host.docker.internal:host-gateway",
-    "-e", `SHOT_CONFIG_GEMINI_LLM_URL=http://host.docker.internal:${PROXY_PORT}/gemini`,
-    "-e", "SHOT_CONFIG_GEMINI_API_KEY=via-proxy",
+    "-e", "SHOT_CONFIG_AGENT_PROVIDER=gateway",
+    "-e", `SHOT_CONFIG_GATEWAY_LLM_URL=http://host.docker.internal:${PROXY_PORT}/gemini`,
     "-e", "SHOT_CONFIG_AGENT_TOOLS_DIR=/srv/shot-template/tools",
     "-e", "SHOT_CONFIG_AGENT_SOUL_FILE=/srv/shot-template/SOUL.md",
     "-e", "SHOT_CONFIG_AGENT_SKILLS_DIR=/srv/shot-template/skills",
