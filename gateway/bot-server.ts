@@ -233,7 +233,9 @@ async function handle({ message }: Update) {
         const event = JSON.parse(line);
         sawEvents = true;
         await sendEvent(chat_id, replyTo, event);
-      } catch {}
+      } catch (e: any) {
+        console.error(`[${chat_id}] sendEvent:`, e?.message ?? e, "raw:", line.slice(0, 200));
+      }
     }
     const code: number | null = await new Promise((r) => proc.on("close", r));
     if (code !== 0 && !sawEvents) {
