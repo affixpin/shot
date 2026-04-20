@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdirSync, chownSync } from "node:fs";
+import { chownSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
 import { createInterface } from "node:readline";
@@ -11,14 +11,38 @@ if (!TELEGRAM_TOKEN || !GEMINI_API_KEY) {
 }
 
 // Host-side path for per-chat data. When running inside the gateway
-// container, this should match the host mount so shot containers
-// spawned via the mounted docker socket can mount the same path.
+// container, this must match the host mount so shot containers spawned
+// via the docker socket can mount the same path.
 const DATA = process.env.DATA_DIR ?? join(process.cwd(), "user_data");
-const TEMPLATE_HOST = process.env.SHOT_TEMPLATE_DIR ?? "/opt/shot-template";
 const IMAGE = process.env.SHOT_IMAGE ?? "affixpin/shot:latest";
 const MEMORY = process.env.SHOT_MEMORY ?? "128m";
 const CPUS = process.env.SHOT_CPUS ?? "0.5";
 const PROXY_PORT = Number(process.env.PROXY_PORT ?? 3000);
+
+// Tool tomls routed through our internal proxy. Pre-written into each
+// chat's tools dir before spawning shot; shot's per-file bootstrap (v0.6+)
+// fills in the rest of the defaults without overwriting these.
+const PROXY_WEB_SEARCH = `healthcheck = "which curl"
+name = "web_search"
+description = "Search the web and return results as markdown"
+command = '''curl -sS -G "http://host.docker.internal:${PROXY_PORT}/jina/search/" --data-urlencode "q=$query" -H "Accept: text/markdown"'''
+
+[vars.query]
+type = "string"
+description = "Search query"
+required = true
+`;
+
+const PROXY_WEB_READ = `healthcheck = "which curl"
+name = "web_read"
+description = "Read a web page and extract its content as markdown"
+command = 'curl -sS "http://host.docker.internal:${PROXY_PORT}/jina/read/$url" -H "Accept: text/markdown"'
+
+[vars.url]
+type = "string"
+description = "URL to read"
+required = true
+`;
 
 mkdirSync(DATA, { recursive: true });
 
@@ -200,22 +224,31 @@ async function handle({ message }: Update) {
   const chat_id = String(message.chat.id);
   const message_id = message.message_id;
   const userDir = join(DATA, chat_id);
-  mkdirSync(userDir, { recursive: true });
-  try { chownSync(userDir, 1000, 1000); } catch {}
+  const toolsDir = join(userDir, "tools");
+  // Pre-populate the two Jina-proxy tool overrides. Shot's per-file
+  // bootstrap (v0.6+) leaves these alone and fills in the other defaults.
+  mkdirSync(toolsDir, { recursive: true });
+  writeFileSync(join(toolsDir, "web_search.toml"), PROXY_WEB_SEARCH);
+  writeFileSync(join(toolsDir, "web_read.toml"), PROXY_WEB_READ);
+  // Shot runs as uid 1000 ('agent') inside the image and can't write to
+  // a root-owned mount. Chown the dir tree we just created.
+  try {
+    chownSync(userDir, 1000, 1000);
+    chownSync(toolsDir, 1000, 1000);
+    chownSync(join(toolsDir, "web_search.toml"), 1000, 1000);
+    chownSync(join(toolsDir, "web_read.toml"), 1000, 1000);
+  } catch {}
   console.log(`[${chat_id}${isGroup ? " group" : ""}] ${text}`);
 
   const args = [
     "run", "--rm",
     "--add-host=host.docker.internal:host-gateway",
-    "-e", "SHOT_CONFIG_AGENT_PROVIDER=gateway",
-    "-e", `SHOT_CONFIG_GATEWAY_LLM_URL=http://host.docker.internal:${PROXY_PORT}/gemini`,
-    "-e", "SHOT_CONFIG_AGENT_TOOLS_DIR=/srv/shot-template/tools",
-    "-e", "SHOT_CONFIG_AGENT_SOUL_FILE=/srv/shot-template/SOUL.md",
-    "-e", "SHOT_CONFIG_AGENT_SKILLS_DIR=/srv/shot-template/skills",
-    "-v", `${TEMPLATE_HOST}:/srv/shot-template:ro`,
     "-v", `${userDir}:/home/agent/.local/share/shot`,
     "--memory", MEMORY, "--cpus", CPUS,
-    IMAGE, "--json", "--tools", `--session=${chat_id}`,
+    IMAGE,
+    "--config.agent.provider=gateway",
+    `--config.gateway.llm_url=http://host.docker.internal:${PROXY_PORT}/gemini`,
+    "--json", "--tools", `--session=${chat_id}`,
   ];
   if (isGroup) args.push("--skills.project_manager");
   args.push(text);

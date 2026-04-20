@@ -9,7 +9,6 @@ RUN npm install --include=dev
 COPY bot-server.ts ./
 
 ENV DATA_DIR=/data
-ENV SHOT_TEMPLATE_DIR=/srv/shot-template
 VOLUME ["/data"]
 
 ENTRYPOINT ["npm", "start"]

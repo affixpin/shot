@@ -20,38 +20,23 @@ docker run -d --name shot-gateway --restart=always \
   -e GEMINI_API_KEY=...      `# https://aistudio.google.com/apikey` \
   -e JINA_API_KEY=...        `# optional; https://jina.ai/reader` \
   -e DATA_DIR=/opt/shot-data \
-  -e SHOT_TEMPLATE_DIR=/opt/shot-template \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v /opt/shot-data:/opt/shot-data \
-  -v /opt/shot-template:/opt/shot-template:ro \
   affixpin/shot-gateway:latest
 ```
 
-Required volumes explained:
+Required volumes:
 
 | mount | why |
 |---|---|
 | `/var/run/docker.sock` | so gateway can spawn `shot` containers via the host Docker daemon |
-| `/opt/shot-data` | per-chat writable directory, mounted identically in and out so `-v` args to spawned shot containers reference valid host paths |
-| `/opt/shot-template` | shared read-only tools + SOUL + skills for every spawned shot container (populated by the provisioning step below) |
+| `/opt/shot-data` | per-chat writable directory, mounted identically in and out so `-v` args the gateway emits when spawning shot containers reference valid host paths |
 
-`--network host` is used so the internal proxy on port 3000 is reachable from spawned shot containers via `host.docker.internal`.
+`--network host` is used so the internal LLM / Jina proxy on port 3000 is reachable from spawned shot containers via `host.docker.internal`.
 
-## first-run setup
+## how it bootstraps per-chat
 
-Before the gateway starts, populate `/opt/shot-template` with shot's defaults and overwrite the two web tools so they route through the proxy:
-
-```bash
-mkdir -p /opt/shot-template && chown 1000:1000 /opt/shot-template
-docker run --rm \
-  -v /opt/shot-template:/home/agent/.local/share/shot \
-  -e SHOT_CONFIG_GEMINI_API_KEY=placeholder \
-  affixpin/shot:latest tools
-# Then overwrite web_search.toml / web_read.toml to use the proxy.
-# See deploy/startup.sh for the exact toml snippets.
-```
-
-`deploy/startup.sh` does all of this in one pass — recommended for any real host.
+First time gateway sees a new `chat_id`, it creates `DATA_DIR/<chat_id>/tools/` and drops two override tomls (`web_search.toml`, `web_read.toml`) pointing at the proxy. Then it spawns a shot container against that directory. Shot's per-file bootstrap (v0.6+) fills in all the other default tools, the SOUL prompt, and the `project_manager` skill — without overwriting the two overrides. No shared template directory, no pre-provisioning step.
 
 ## env vars
 
