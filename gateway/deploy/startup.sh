@@ -7,12 +7,6 @@ set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
 
-# ── Clean up legacy systemd-based deploy (pre-gateway-image path) ──────
-systemctl stop    shot-bot 2>/dev/null || true
-systemctl disable shot-bot 2>/dev/null || true
-rm -f /etc/systemd/system/shot-bot.service /etc/shot-bot.env
-systemctl daemon-reload
-
 # ── Docker CE from docker.com ──────────────────────────────────────────
 apt-get update
 apt-get install -y ca-certificates curl gnupg
