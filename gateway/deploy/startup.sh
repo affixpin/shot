@@ -1,36 +1,30 @@
 #!/bin/bash
-# Runs on VM first boot via GCE startup-script metadata.
-# Installs Node + Docker, bootstraps a shared shot template (tools + soul)
-# with the web_search/web_read tomls rewritten to hit our Jina proxy,
-# fetches secrets from Secret Manager, starts the bot under systemd.
+# Runs on VM boot via GCE startup-script metadata.
+# Installs Docker, bootstraps the shared shot-template directory,
+# fetches secrets from Secret Manager, runs the gateway container.
 set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
 
 # ── Dependencies ───────────────────────────────────────────────────────
 apt-get update
-curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-apt-get install -y nodejs docker.io git ca-certificates
+apt-get install -y docker.io ca-certificates
 systemctl enable --now docker
 
-docker pull affixpin/shot:latest || true
+docker pull affixpin/shot:latest          || true
+docker pull affixpin/shot-gateway:latest  || true
 
-# ── Shared shot template (tools + soul) ────────────────────────────────
-# Run shot once with a placeholder key so Config::load triggers its
-# first-run bootstrap and writes the 11 default tool tomls + SOUL.md
-# into /opt/shot-template. We then overwrite the two tools that would
-# otherwise ship a Jina API key into the container.
-#
-# The mount must be owned by uid 1000 before the container runs,
-# because shot runs as user `agent` (uid 1000) inside the image and
-# can't write to a root-owned mount.
+# ── Shared shot template (tools + soul + skills) ───────────────────────
+# Bootstrap by running shot's built-in default extraction once, then
+# overwrite web_search/web_read with the versions that route through
+# the gateway's Jina proxy (so API keys stay server-side).
 mkdir -p /opt/shot-template
 chown 1000:1000 /opt/shot-template
 docker run --rm \
   -v /opt/shot-template:/home/agent/.local/share/shot \
   -e SHOT_CONFIG_GEMINI_API_KEY=placeholder \
   affixpin/shot:latest tools >/dev/null 2>&1 || true
-mkdir -p /opt/shot-template/tools  # safety in case bootstrap silently failed
+mkdir -p /opt/shot-template/tools
 
 cat > /opt/shot-template/tools/web_search.toml <<'EOF'
 healthcheck = "which curl"
@@ -56,48 +50,32 @@ description = "URL to read"
 required = true
 EOF
 
-# Project-manager skill — activated in group chats via --skill=project_manager.
-mkdir -p /opt/shot-template/skills
-cat > /opt/shot-template/skills/project_manager.md <<'EOF'
-# Project manager
-
-This chat has a shared task list. You manage it.
-
-- File path: `~/.local/share/shot/tasks.md`
-- Format: one markdown checklist item per line.
-  - `- [ ] description` — open, unassigned
-  - `- [ ] @username: description` — open, assigned to someone
-  - `- [x] ...` — completed
-- When users ask what's on the list, use `file_read` to show it.
-- When users add, check off, or remove tasks, `file_read` first, then `file_write` with the full updated contents. Preserve the order and format of existing lines exactly — only add, flip `[ ]`/`[x]`, or remove matched lines.
-- If the file doesn't exist yet, treat it as empty and create it on first write.
-- Respond conversationally after the edit (e.g. "added for @alice", "2 tasks done"). Don't dump the whole list unless asked.
-EOF
-
 chown -R 1000:1000 /opt/shot-template
 
-# ── App code ───────────────────────────────────────────────────────────
-rm -rf /opt/shot
-git clone https://github.com/affixpin/shot /opt/shot
-APP_DIR=/opt/shot/gateway
-cd "$APP_DIR"
-npm install --include=dev
+# Per-chat writable data (sessions, tasks.md, etc.).
+mkdir -p /opt/shot-data
+chown 1000:1000 /opt/shot-data
 
 # ── Secrets ────────────────────────────────────────────────────────────
 TELEGRAM_TOKEN=$(gcloud secrets versions access latest --secret=telegram-token)
 GEMINI_API_KEY=$(gcloud secrets versions access latest --secret=gemini-api-key)
 JINA_API_KEY=$(gcloud secrets versions access latest --secret=jina-api-key 2>/dev/null || echo "")
 
-install -o root -g root -m 600 /dev/null /etc/shot-bot.env
-cat > /etc/shot-bot.env <<EOF
-TELEGRAM_TOKEN=$TELEGRAM_TOKEN
-GEMINI_API_KEY=$GEMINI_API_KEY
-JINA_API_KEY=$JINA_API_KEY
-EOF
-
-# ── systemd ────────────────────────────────────────────────────────────
-install -m 644 "$APP_DIR/deploy/shot-bot.service" /etc/systemd/system/shot-bot.service
-systemctl daemon-reload
-systemctl enable shot-bot
-# restart (not start) so reruns pick up fresh code / env / secrets
-systemctl restart shot-bot
+# ── Run the gateway container ──────────────────────────────────────────
+# --network host so the internal proxy (port 3000) is reachable from
+# spawned shot containers via host.docker.internal.
+# /var/run/docker.sock mount lets the gateway spawn shot containers
+# on the host daemon. Shared paths use the same names inside and out
+# so -v args the gateway generates remain valid host paths.
+docker rm -f shot-gateway 2>/dev/null || true
+docker run -d --name shot-gateway --restart=always \
+  --network host \
+  -e TELEGRAM_TOKEN="$TELEGRAM_TOKEN" \
+  -e GEMINI_API_KEY="$GEMINI_API_KEY" \
+  -e JINA_API_KEY="$JINA_API_KEY" \
+  -e DATA_DIR=/opt/shot-data \
+  -e SHOT_TEMPLATE_DIR=/opt/shot-template \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /opt/shot-data:/opt/shot-data \
+  -v /opt/shot-template:/opt/shot-template:ro \
+  affixpin/shot-gateway:latest
