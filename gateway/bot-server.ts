@@ -354,7 +354,8 @@ while (true) {
     if (!ok) continue;
     for (const u of result) {
       offset = u.update_id;
-      console.log("update:", JSON.stringify(u).slice(0, 500));
+      const m = u.message ?? {};
+      console.log(`update ${u.update_id}: chat=${(m as any).chat?.type}/${(m as any).chat?.id} text=${JSON.stringify((m as any).text)} caption=${JSON.stringify((m as any).caption)} photo=${!!(m as any).photo} reply_from=${(m as any).reply_to_message?.from?.id}`);
       handle(u).catch(console.error);
     }
   } catch (e: any) {
