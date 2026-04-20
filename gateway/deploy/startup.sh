@@ -6,6 +6,14 @@ set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
 
+# ── Clean up legacy systemd-based deploy (pre-gateway-image path) ──────
+# Previous versions ran the bot under a systemd unit that binds port 3000.
+# Remove it so the gateway container can take over that port.
+systemctl stop    shot-bot 2>/dev/null || true
+systemctl disable shot-bot 2>/dev/null || true
+rm -f /etc/systemd/system/shot-bot.service /etc/shot-bot.env
+systemctl daemon-reload
+
 # ── Dependencies ───────────────────────────────────────────────────────
 apt-get update
 apt-get install -y docker.io ca-certificates
