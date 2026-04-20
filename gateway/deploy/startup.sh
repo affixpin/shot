@@ -15,8 +15,24 @@ rm -f /etc/systemd/system/shot-bot.service /etc/shot-bot.env
 systemctl daemon-reload
 
 # ── Dependencies ───────────────────────────────────────────────────────
+# Docker CE from docker.com — Debian's docker.io is two years behind and
+# its daemon API (1.41) doesn't match what the gateway container's
+# docker-cli (API 1.52+) speaks. Remove docker.io if a prior boot
+# installed it, then install docker-ce from the official repo.
 apt-get update
-apt-get install -y docker.io ca-certificates
+apt-get install -y ca-certificates curl gnupg
+apt-get remove -y docker.io docker-doc docker-compose podman-docker containerd runc 2>/dev/null || true
+install -m 0755 -d /etc/apt/keyrings
+if [ ! -f /etc/apt/keyrings/docker.asc ]; then
+  curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
+  chmod a+r /etc/apt/keyrings/docker.asc
+fi
+. /etc/os-release
+cat > /etc/apt/sources.list.d/docker.list <<EOF
+deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian $VERSION_CODENAME stable
+EOF
+apt-get update
+apt-get install -y docker-ce docker-ce-cli containerd.io
 systemctl enable --now docker
 
 docker pull affixpin/shot:latest          || true
