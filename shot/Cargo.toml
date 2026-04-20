@@ -13,6 +13,7 @@ toml = "0.8"
 clap = { version = "4", features = ["derive"] }
 rusqlite = { version = "0.37", features = ["bundled"] }
 termimad = "0.31"
+base64 = "0.22"
 
 [[bin]]
 name = "shot"

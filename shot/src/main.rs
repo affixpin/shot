@@ -56,6 +56,36 @@ struct Cli {
     /// Use a specific config file (default: $XDG_CONFIG_HOME/shot/agent.toml or ~/.config/shot/agent.toml)
     #[arg(long)]
     config_file: Option<String>,
+
+    /// Attach an image file to the message. Path or URL. May be repeated.
+    #[arg(long = "file", value_name = "path|url")]
+    files: Vec<String>,
+}
+
+/// Detect image mime type from magic bytes.
+fn detect_image_mime(bytes: &[u8]) -> &'static str {
+    match bytes {
+        [0xFF, 0xD8, 0xFF, ..] => "image/jpeg",
+        [0x89, 0x50, 0x4E, 0x47, ..] => "image/png",
+        [0x47, 0x49, 0x46, ..] => "image/gif",
+        b if b.len() >= 12 && &b[0..4] == b"RIFF" && &b[8..12] == b"WEBP" => "image/webp",
+        _ => "application/octet-stream",
+    }
+}
+
+/// Resolve `--file` value to an `image_url` string: URL → passthrough, path → data URI.
+fn resolve_file(spec: &str) -> String {
+    use base64::Engine;
+    if spec.starts_with("http://") || spec.starts_with("https://") || spec.starts_with("data:") {
+        return spec.to_string();
+    }
+    let bytes = std::fs::read(spec).unwrap_or_else(|e| {
+        eprintln!("Error reading --file {spec}: {e}");
+        std::process::exit(1);
+    });
+    let mime = detect_image_mime(&bytes);
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    format!("data:{mime};base64,{b64}")
 }
 
 #[derive(Subcommand)]
@@ -380,6 +410,7 @@ async fn main() {
                 soul_override: soul_override.clone(),
                 prompt_addition: prompt_addition.clone(),
                 skills: skills.clone(),
+                attachments: Vec::new(),
             };
 
             match shotclaw::run(&config, opts).await {
@@ -414,6 +445,8 @@ async fn main() {
         }
     };
 
+    let attachments: Vec<String> = cli.files.iter().map(|s| resolve_file(s)).collect();
+
     let opts = RunOptions {
         session_path: session_path.as_deref(),
         message: &message,
@@ -423,6 +456,7 @@ async fn main() {
         soul_override,
         prompt_addition,
         skills,
+        attachments,
     };
 
     match shotclaw::run(&config, opts).await {

@@ -23,7 +23,7 @@ pub struct FunctionDef {
 pub struct Message {
     pub role: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub content: Option<String>,
+    pub content: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -35,21 +35,29 @@ pub struct Message {
 impl Message {
     pub fn system(content: impl Into<String>) -> Self {
         Self {
-            role: "system".into(), content: Some(content.into()),
+            role: "system".into(), content: Some(serde_json::Value::String(content.into())),
             tool_calls: None, tool_call_id: None, extra: Default::default(),
         }
     }
 
     pub fn user(content: impl Into<String>) -> Self {
         Self {
-            role: "user".into(), content: Some(content.into()),
+            role: "user".into(), content: Some(serde_json::Value::String(content.into())),
+            tool_calls: None, tool_call_id: None, extra: Default::default(),
+        }
+    }
+
+    /// User message with OpenAI multimodal content (array of {type,text}/{type,image_url} parts).
+    pub fn user_parts(parts: serde_json::Value) -> Self {
+        Self {
+            role: "user".into(), content: Some(parts),
             tool_calls: None, tool_call_id: None, extra: Default::default(),
         }
     }
 
     pub fn tool_result(id: impl Into<String>, content: impl Into<String>) -> Self {
         Self {
-            role: "tool".into(), content: Some(content.into()),
+            role: "tool".into(), content: Some(serde_json::Value::String(content.into())),
             tool_calls: None, tool_call_id: Some(id.into()), extra: Default::default(),
         }
     }
@@ -329,7 +337,7 @@ pub async fn run(
 
         let reply = Message {
             role: "assistant".into(),
-            content: if result.content.is_empty() { None } else { Some(result.content.clone()) },
+            content: if result.content.is_empty() { None } else { Some(serde_json::Value::String(result.content.clone())) },
             tool_calls: if result.tool_calls.is_empty() { None } else { Some(result.tool_calls.clone()) },
             tool_call_id: None,
             extra: Default::default(),

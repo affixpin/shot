@@ -5,6 +5,26 @@ use crate::session::Session;
 use crate::tools::ExternalTools;
 use std::collections::HashMap;
 
+/// Rewrite multimodal user content into a plain string before persisting.
+/// Keeps text parts verbatim and replaces each image with `[image]` so
+/// session DBs don't balloon with base64.
+fn strip_images(msg: &Message) -> Message {
+    let Some(arr) = msg.content.as_ref().and_then(|v| v.as_array()) else {
+        return msg.clone();
+    };
+    let pieces: Vec<String> = arr.iter().map(|part| {
+        match part.get("type").and_then(|v| v.as_str()) {
+            Some("text") => part.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            Some("image_url") => "[image]".to_string(),
+            _ => String::new(),
+        }
+    }).filter(|s| !s.is_empty()).collect();
+
+    let mut clone = msg.clone();
+    clone.content = Some(serde_json::Value::String(pieces.join("\n\n")));
+    clone
+}
+
 // ── Event handler ──────────────────────────────────────────────────────
 
 struct EventHandler;
@@ -56,6 +76,9 @@ pub struct RunOptions<'a> {
     /// Activated skills — contents of `<skills_dir>/<name>.md` files, in
     /// order, appended to the system prompt between soul and prompt_addition.
     pub skills: Vec<String>,
+    /// Image URLs (https:// or data:) to attach to the first user message.
+    /// Empty = plain text message.
+    pub attachments: Vec<String>,
 }
 
 // ── Run ────────────────────────────────────────────────────────────────
@@ -125,14 +148,26 @@ pub async fn run(
     let mut messages = vec![Message::system(&system)];
     let session_len = session_history.len();
     messages.extend(session_history);
-    messages.push(Message::user(opts.message));
+    if opts.attachments.is_empty() {
+        messages.push(Message::user(opts.message));
+    } else {
+        let mut parts = Vec::with_capacity(1 + opts.attachments.len());
+        parts.push(serde_json::json!({"type": "text", "text": opts.message}));
+        for url in &opts.attachments {
+            parts.push(serde_json::json!({
+                "type": "image_url",
+                "image_url": { "url": url },
+            }));
+        }
+        messages.push(Message::user_parts(serde_json::Value::Array(parts)));
+    }
 
     let result = react::run(&react_config, &tools, messages, &handler).await?;
 
     if let Some(ref s) = session {
         let new_start = 1 + session_len;
         for msg in result.messages.iter().skip(new_start) {
-            s.push(msg);
+            s.push(&strip_images(msg));
         }
     }
 
