@@ -56,7 +56,7 @@ type Update = {
     photo?: PhotoSize[];
     message_id: number;
     chat: { id: number; type: "private" | "group" | "supergroup" | "channel" };
-    reply_to_message?: { from?: { id: number } };
+    reply_to_message?: { from?: { id: number }; photo?: PhotoSize[] };
   };
 };
 
@@ -247,7 +247,15 @@ async function downloadPhoto(
 async function handle({ message }: Update) {
   if (!message) return;
 
-  const hasPhoto = !!message.photo?.length;
+  // Photo source: the current message's photo, or — if replying — the
+  // replied-to message's photo. Lets users mention the bot in a reply to
+  // someone else's image without re-sending it.
+  const photoSource = message.photo?.length
+    ? message.photo
+    : message.reply_to_message?.photo?.length
+      ? message.reply_to_message.photo
+      : undefined;
+  const hasPhoto = !!photoSource;
   const rawText = message.text ?? message.caption ?? "";
   if (!rawText && !hasPhoto) return;
 
@@ -285,8 +293,8 @@ async function handle({ message }: Update) {
 
   let photoHostPath: string | undefined;
   let photoContainerPath: string | undefined;
-  if (hasPhoto) {
-    photoContainerPath = await downloadPhoto(userDir, message_id, message.photo!, chat_id);
+  if (photoSource) {
+    photoContainerPath = await downloadPhoto(userDir, message_id, photoSource, chat_id);
     if (photoContainerPath) {
       photoHostPath = join(userDir, "uploads", photoContainerPath.split("/").pop()!);
     }
