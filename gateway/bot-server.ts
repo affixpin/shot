@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { chownSync, mkdirSync, writeFileSync } from "node:fs";
+import { chownSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
 import { createInterface } from "node:readline";
@@ -46,10 +46,14 @@ required = true
 
 mkdirSync(DATA, { recursive: true });
 
+type PhotoSize = { file_id: string; file_unique_id: string; width: number; height: number; file_size?: number };
+
 type Update = {
   update_id: number;
   message?: {
     text?: string;
+    caption?: string;
+    photo?: PhotoSize[];
     message_id: number;
     chat: { id: number; type: "private" | "group" | "supergroup" | "channel" };
     reply_to_message?: { from?: { id: number } };
@@ -205,21 +209,61 @@ async function sendEvent(
 
 // ── Shot invocation ────────────────────────────────────────────────────
 
+// Download largest photo in the message to `${userDir}/uploads/<name>`.
+// Returns the container-side path for shot's `--file` flag, or undefined.
+async function downloadPhoto(
+  userDir: string,
+  message_id: number,
+  photo: PhotoSize[],
+  chat_id: string,
+): Promise<string | undefined> {
+  const largest = photo.reduce((a, b) => (b.width * b.height > a.width * a.height ? b : a));
+  try {
+    const meta = (await (await fetch(
+      `https://api.telegram.org/bot${TELEGRAM_TOKEN}/getFile?file_id=${encodeURIComponent(largest.file_id)}`,
+    )).json()) as { ok: boolean; result?: { file_path: string } };
+    if (!meta.ok || !meta.result) return undefined;
+
+    const dl = await fetch(`https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${meta.result.file_path}`);
+    const buf = Buffer.from(await dl.arrayBuffer());
+    const ext = meta.result.file_path.split(".").pop() || "jpg";
+    const uploadsDir = join(userDir, "uploads");
+    mkdirSync(uploadsDir, { recursive: true });
+    const filename = `img-${message_id}.${ext}`;
+    const hostPath = join(uploadsDir, filename);
+    writeFileSync(hostPath, buf);
+    try {
+      chownSync(uploadsDir, 1000, 1000);
+      chownSync(hostPath, 1000, 1000);
+    } catch {}
+    // The per-chat dir is mounted at /home/agent/.local/share/shot inside the container.
+    return `/home/agent/.local/share/shot/uploads/${filename}`;
+  } catch (e: any) {
+    console.error(`[${chat_id}] photo download:`, e.message);
+    return undefined;
+  }
+}
+
 async function handle({ message }: Update) {
-  if (!message?.text) return;
+  if (!message) return;
+
+  const hasPhoto = !!message.photo?.length;
+  const rawText = message.text ?? message.caption ?? "";
+  if (!rawText && !hasPhoto) return;
 
   // In groups/supergroups, only respond when @mentioned OR when the user
   // is replying to one of the bot's own messages. Strip the handle so shot
   // doesn't see it in the message text.
-  let text = message.text;
   const isGroup = message.chat.type !== "private";
   if (isGroup) {
-    const isMention = text.includes(BOT_HANDLE);
+    const isMention = rawText.includes(BOT_HANDLE);
     const isReplyToBot = message.reply_to_message?.from?.id === BOT_ID;
     if (!isMention && !isReplyToBot) return;
-    text = text.replaceAll(BOT_HANDLE, "").trim();
-    if (!text) return;
   }
+  let text = rawText.replaceAll(BOT_HANDLE, "").trim();
+  // Photo with no caption: give shot a sensible default prompt.
+  if (!text && hasPhoto) text = "what is this?";
+  if (!text) return;
 
   const chat_id = String(message.chat.id);
   const message_id = message.message_id;
@@ -238,7 +282,17 @@ async function handle({ message }: Update) {
     chownSync(join(toolsDir, "web_search.toml"), 1000, 1000);
     chownSync(join(toolsDir, "web_read.toml"), 1000, 1000);
   } catch {}
-  console.log(`[${chat_id}${isGroup ? " group" : ""}] ${text}`);
+
+  let photoHostPath: string | undefined;
+  let photoContainerPath: string | undefined;
+  if (hasPhoto) {
+    photoContainerPath = await downloadPhoto(userDir, message_id, message.photo!, chat_id);
+    if (photoContainerPath) {
+      photoHostPath = join(userDir, "uploads", photoContainerPath.split("/").pop()!);
+    }
+  }
+
+  console.log(`[${chat_id}${isGroup ? " group" : ""}${photoContainerPath ? " +photo" : ""}] ${text}`);
 
   const args = [
     "run", "--rm",
@@ -251,6 +305,7 @@ async function handle({ message }: Update) {
     "--json", "--tools", `--session=${chat_id}`,
   ];
   if (isGroup) args.push("--skills.project_manager");
+  if (photoContainerPath) args.push("--file", photoContainerPath);
   args.push(text);
 
   const proc = spawn("docker", args, { stdio: ["ignore", "pipe", "pipe"] });
@@ -279,6 +334,9 @@ async function handle({ message }: Update) {
     if (!sawEvents) await tg("sendMessage", { chat_id, text: "error processing your message", reply_to_message_id: replyTo });
   } finally {
     clearTimeout(killer);
+    if (photoHostPath) {
+      try { rmSync(photoHostPath, { force: true }); } catch {}
+    }
   }
 }
 
