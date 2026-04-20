@@ -10,7 +10,10 @@ if (!TELEGRAM_TOKEN || !GEMINI_API_KEY) {
   process.exit(1);
 }
 
-const DATA = join(process.cwd(), "user_data");
+// Host-side path for per-chat data. When running inside the gateway
+// container, this should match the host mount so shot containers
+// spawned via the mounted docker socket can mount the same path.
+const DATA = process.env.DATA_DIR ?? join(process.cwd(), "user_data");
 const TEMPLATE_HOST = process.env.SHOT_TEMPLATE_DIR ?? "/opt/shot-template";
 const IMAGE = process.env.SHOT_IMAGE ?? "affixpin/shot:latest";
 const MEMORY = process.env.SHOT_MEMORY ?? "128m";

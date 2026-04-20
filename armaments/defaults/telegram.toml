@@ -1,8 +1,0 @@
-name = "telegram"
-healthcheck = 'which curl && test -n "$bot_token"'
-command = '''U=https://api.telegram.org/bot$bot_token/getUpdates && r=$(curl -s "$U?timeout=30" | tr -d '\n\r') && n=$(printf %s "$r" | grep -oE '"update_id":[0-9]+' | tail -1 | grep -oE '[0-9]+') && [ -n "$n" ] && curl -s "$U?offset=$((n + 1))" >/dev/null && printf 'You are a Telegram bot. The following is a Telegram getUpdates JSON response containing one or more messages. For each message, extract chat.id and text, then call tg_send with that chat_id and your reply. %s\n' "$r"'''
-interval = 1
-
-[vars.bot_token]
-description = "Telegram bot token"
-required = true

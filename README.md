@@ -2,7 +2,7 @@
   <img src="shooter.jpeg" width="200" />
   <h1>shot agent</h1>
   <p><strong>minimal, portable unix-friendly agent</strong></p>
-  <p>try the live demo: <a href="./examples/multitenant-telegram-agent">multitenant telegram bot</a> → <a href="https://t.me/autoshot_bot">@autoshot_bot</a></p>
+  <p>try the live demo: <a href="./gateway">multitenant telegram bot</a> → <a href="https://t.me/autoshot_bot">@autoshot_bot</a></p>
 </div>
 
 ---
@@ -64,22 +64,6 @@ docker run --rm \
   affixpin/shot --tools "what's in the current directory?"
 ```
 
-### telegram bot in one container
-
-Shot ships with a companion binary, `armaments`, that polls event sources and prints each event to stdout. Pipe it into `shot --pipe`.
-
-```bash
-docker run --rm -i \
-  -e SHOT_CONFIG_GEMINI_API_KEY=YOUR_GEMINI_KEY \
-  -e BOT_TOKEN=YOUR_TELEGRAM_BOT_TOKEN \
-  affixpin/shot sh -c '
-    armaments telegram --vars.bot_token=$BOT_TOKEN \
-      | shot --pipe --tools --tools.tg_send.vars.bot_token=$BOT_TOKEN
-  '
-```
-
-Armaments long-polls Telegram. Each batch of messages gets printed on one line. Shot reads line by line and replies with `tg_send`.
-
 ### build from source
 
 Rust workspace, so `rustup` is the only prerequisite.
@@ -88,14 +72,12 @@ Rust workspace, so `rustup` is the only prerequisite.
 git clone https://github.com/affixpin/shot
 cd shot
 
-# install both binaries to ~/.cargo/bin
+# install the binary to ~/.cargo/bin
 cargo install --path shot
-cargo install --path armaments
 
 # or build without installing
-cargo build --release --workspace
+cargo build --release -p shot
 sudo ln -s "$(pwd)/target/release/shot" /usr/local/bin/shot
-sudo ln -s "$(pwd)/target/release/armaments" /usr/local/bin/armaments
 ```
 
 On the first run shot drops its default tools and soul prompt into `~/.local/share/shot/`. No separate configure step, just set the key:
@@ -150,3 +132,21 @@ Default set, installed on first run:
 | `memory_recall` | Search saved memory via `engram`          |
 
 To add your own, drop another `.toml` in the tools directory. Shot picks it up next run.
+
+## gateway
+
+Shot is one-shot: start, handle a message, exit. For anything longer-running (a Telegram bot, a webhook, a Slack app) you need a host process that decides when to spawn shot and with which args. That's `shot-gateway` — a minimal Node.js server shipped as a separate image.
+
+The live demo at [@autoshot_bot](https://t.me/autoshot_bot) runs on it. It polls Telegram, spawns one shot container per message with per-chat isolation, and proxies LLM + Jina calls so API keys never enter a shot container.
+
+```bash
+docker run -d --name shot-gateway --restart=always \
+  -e TELEGRAM_TOKEN=... \
+  -e GEMINI_API_KEY=... \
+  -e JINA_API_KEY=...                                  # optional, enables web_search/web_read
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /opt/shot-data:/data \
+  affixpin/shot-gateway:latest
+```
+
+Full setup (GCP deploy scripts, secret manager wiring, proxy explainer) lives under [`./gateway`](./gateway).

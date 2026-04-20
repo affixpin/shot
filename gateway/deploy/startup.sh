@@ -79,7 +79,7 @@ chown -R 1000:1000 /opt/shot-template
 # ── App code ───────────────────────────────────────────────────────────
 rm -rf /opt/shot
 git clone https://github.com/affixpin/shot /opt/shot
-APP_DIR=/opt/shot/examples/multitenant-telegram-agent
+APP_DIR=/opt/shot/gateway
 cd "$APP_DIR"
 npm install --include=dev
 
