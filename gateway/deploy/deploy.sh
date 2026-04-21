@@ -17,7 +17,7 @@ NAME="${NAME:-shot-bot}"
 SA_EMAIL="$NAME@$PROJECT.iam.gserviceaccount.com"
 
 # Secrets (empty placeholders — fill in afterwards with `gcloud secrets versions add`)
-for secret in telegram-token gemini-api-key jina-api-key nango-encryption-key nango-admin-password; do
+for secret in telegram-token gemini-api-key jina-api-key; do
   if ! gcloud secrets describe "$secret" >/dev/null 2>&1; then
     gcloud secrets create "$secret" --replication-policy=automatic
   fi
@@ -29,14 +29,14 @@ if ! gcloud iam service-accounts describe "$SA_EMAIL" >/dev/null 2>&1; then
 fi
 
 # Grant secretmanager.secretAccessor for each secret
-for secret in telegram-token gemini-api-key jina-api-key nango-encryption-key nango-admin-password; do
+for secret in telegram-token gemini-api-key jina-api-key; do
   gcloud secrets add-iam-policy-binding "$secret" \
     --member="serviceAccount:$SA_EMAIL" \
     --role=roles/secretmanager.secretAccessor \
     --condition=None >/dev/null
 done
 
-# VM (e2-small gives us 2GB RAM for gateway + Nango + Caddy + per-chat shot containers)
+# VM (e2-small: 2GB RAM, ~$14/mo — roomy for the gateway + Caddy + per-chat shot containers)
 HERE=$(dirname "$0")
 if ! gcloud compute instances describe "$NAME" --zone="$ZONE" >/dev/null 2>&1; then
   gcloud compute instances create "$NAME" \
