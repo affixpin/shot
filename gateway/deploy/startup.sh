@@ -26,10 +26,29 @@ systemctl enable --now docker
 
 docker pull affixpin/shot:latest         || true
 docker pull affixpin/shot-gateway:latest || true
+docker pull caddy:2-alpine               || true
 
 # ── Per-chat data (writable, mounted into each spawned shot container) ─
 mkdir -p /opt/shot-data
 chown 1000:1000 /opt/shot-data
+
+# ── Caddy reverse proxy on 80/443 (auto TLS via Let's Encrypt) ──────────
+# Proxies bot.autoshot.dev to the gateway webapp port (4000) so Telegram
+# Mini App + Nango webhooks have a valid HTTPS origin.
+mkdir -p /opt/caddy
+cat > /opt/caddy/Caddyfile <<'CADDY'
+bot.autoshot.dev {
+    reverse_proxy 127.0.0.1:4000
+}
+CADDY
+
+docker rm -f shot-caddy 2>/dev/null || true
+docker run -d --name shot-caddy --restart=always \
+  --network host \
+  -v /opt/caddy/Caddyfile:/etc/caddy/Caddyfile:ro \
+  -v /opt/caddy/data:/data \
+  -v /opt/caddy/config:/config \
+  caddy:2-alpine
 
 # ── Secrets ────────────────────────────────────────────────────────────
 TELEGRAM_TOKEN=$(gcloud secrets versions access latest --secret=telegram-token)
