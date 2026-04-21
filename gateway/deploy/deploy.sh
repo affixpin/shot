@@ -17,7 +17,7 @@ NAME="${NAME:-shot-bot}"
 SA_EMAIL="$NAME@$PROJECT.iam.gserviceaccount.com"
 
 # Secrets (empty placeholders — fill in afterwards with `gcloud secrets versions add`)
-for secret in telegram-token gemini-api-key jina-api-key; do
+for secret in telegram-token gemini-api-key jina-api-key nango-encryption-key nango-admin-password; do
   if ! gcloud secrets describe "$secret" >/dev/null 2>&1; then
     gcloud secrets create "$secret" --replication-policy=automatic
   fi
@@ -29,7 +29,7 @@ if ! gcloud iam service-accounts describe "$SA_EMAIL" >/dev/null 2>&1; then
 fi
 
 # Grant secretmanager.secretAccessor for each secret
-for secret in telegram-token gemini-api-key jina-api-key; do
+for secret in telegram-token gemini-api-key jina-api-key nango-encryption-key nango-admin-password; do
   gcloud secrets add-iam-policy-binding "$secret" \
     --member="serviceAccount:$SA_EMAIL" \
     --role=roles/secretmanager.secretAccessor \
